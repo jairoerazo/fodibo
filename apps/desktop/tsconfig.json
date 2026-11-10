@@ -9,5 +9,6 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src", "scripts"]
+  "include": ["src", "scripts", "electron.vite.config.ts"],
+  "exclude": ["src/renderer"]
 }
