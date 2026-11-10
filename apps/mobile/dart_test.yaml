@@ -1,0 +1,3 @@
+tags:
+  # Pruebas contra el servidor Node real (npm run dev:server); requieren Node y npm.
+  interop:
