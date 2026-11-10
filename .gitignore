@@ -67,6 +67,7 @@ DerivedData/
 *.key
 
 # Registros y temporales
+.dev-data/
 *.log
 tmp/
 .tmp/

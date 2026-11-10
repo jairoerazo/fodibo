@@ -97,4 +97,53 @@ describe('PairingSession', () => {
     expect(closed).toBe(1);
     expect(codeOf(() => session.authenticate(sessionToken))).toBe('unauthorized');
   });
+
+  it('(R5) tras emparejar, los pair fallidos no cuentan para el cierre', () => {
+    const { session } = make();
+    const { sessionToken } = session.pair(session.secret, 'Pixel');
+    for (let i = 0; i < 7; i++) {
+      expect(codeOf(() => session.pair('incorrecto', 'x'))).toBe('invalid_secret');
+    }
+    expect(codeOf(() => session.pair(session.secret, 'x'))).toBe('invalid_secret');
+    expect(session.closed).toBe(false);
+    session.authenticate(sessionToken);
+  });
+
+  it('el motivo de cierre llega a onClose', () => {
+    const reasons: string[] = [];
+    const a = make().session;
+    a.onClose((r) => reasons.push(r));
+    for (let i = 0; i < 5; i++) codeOf(() => a.pair('incorrecto', 'x'));
+    const b = make().session;
+    b.onClose((r) => reasons.push(r));
+    b.close();
+    expect(reasons).toEqual(['too-many-attempts', 'stopped']);
+  });
+
+  it('(R6) checkIdle cierra por inactividad sin petición; antes de emparejar no hace nada', () => {
+    const { session, clock } = make();
+    const reasons: string[] = [];
+    session.onClose((r) => reasons.push(r));
+    clock.t += 4 * MIN;
+    session.checkIdle();
+    expect(session.closed).toBe(false);
+    session.pair(session.secret, 'Pixel');
+    clock.t += 30 * MIN;
+    session.checkIdle();
+    expect(session.closed).toBe(false);
+    clock.t += 1;
+    session.checkIdle();
+    expect(session.closed).toBe(true);
+    expect(reasons).toEqual(['inactive']);
+  });
+
+  it('inactividad detectada en authenticate informa "inactive"', () => {
+    const { session, clock } = make();
+    const reasons: string[] = [];
+    session.onClose((r) => reasons.push(r));
+    const { sessionToken } = session.pair(session.secret, 'Pixel');
+    clock.t += 30 * MIN + 1;
+    expect(codeOf(() => session.authenticate(sessionToken))).toBe('unauthorized');
+    expect(reasons).toEqual(['inactive']);
+  });
 });

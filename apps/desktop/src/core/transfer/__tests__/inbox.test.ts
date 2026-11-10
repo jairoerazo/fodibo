@@ -311,4 +311,25 @@ describe('Inbox', () => {
   it('list sin carpeta raíz ni paquetes', async () => {
     expect(await new Inbox(join(root, 'nada')).list()).toEqual([]);
   });
+
+  it('commitPackage indica si el recibo es nuevo y devuelve el dispositivo', async () => {
+    const m = manifestOf([entry('c.json', 'application/json', JSONB)], { device_name: 'Pixel 8' });
+    await inbox.announce(m);
+    await inbox.storeFile(m.package_id, sha(JSONB), Readable.from([JSONB]));
+    const first = await inbox.commitPackage(m.package_id);
+    expect(first.created).toBe(true);
+    expect(first.pkg.deviceName).toBe('Pixel 8');
+    const again = await inbox.commitPackage(m.package_id);
+    expect(again.created).toBe(false);
+    expect(again.pkg.receipt).toEqual(first.pkg.receipt);
+  });
+
+  it('fileEntry devuelve la entrada declarada o not_found', async () => {
+    const m = three();
+    await inbox.announce(m);
+    expect((await inbox.fileEntry(m.package_id, m.files[1].sha256)).size).toBe(PDF.length);
+    expect(await codeOf(inbox.fileEntry(m.package_id, 'f'.repeat(64)))).toBe('not_found');
+    expect(await codeOf(inbox.fileEntry('../x', m.files[1].sha256))).toBe('not_found');
+  });
 });
+

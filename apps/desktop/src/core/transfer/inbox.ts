@@ -188,11 +188,16 @@ export class Inbox {
     return { package_id: m.package_id, missing: await this.missingOf(m) };
   }
 
-  async storeFile(packageId: string, sha256: string, body: Readable): Promise<void> {
+  /** Entrada del manifiesto para `sha256`; `not_found` si el paquete o el hash no existen. */
+  async fileEntry(packageId: string, sha256: string): Promise<ManifestFile> {
     const manifest = await this.readManifest(packageId);
-    if (!SHA_RE.test(sha256)) throw new TransferError('not_found', 'Archivo no encontrado');
-    const declared: ManifestFile | undefined = manifest.files.find((f) => f.sha256 === sha256);
+    const declared = SHA_RE.test(sha256) ? manifest.files.find((f) => f.sha256 === sha256) : undefined;
     if (!declared) throw new TransferError('not_found', 'Archivo no encontrado');
+    return declared;
+  }
+
+  async storeFile(packageId: string, sha256: string, body: Readable): Promise<void> {
+    const declared = await this.fileEntry(packageId, sha256);
 
     const filesDir = join(this.dir(packageId), 'files');
     const finalPath = join(filesDir, sha256);
@@ -224,9 +229,15 @@ export class Inbox {
   }
 
   async commit(packageId: string): Promise<Receipt> {
+    return (await this.commitPackage(packageId)).pkg.receipt;
+  }
+
+  /** Como `commit`, indicando además si el recibo se acaba de crear (`created`) o ya existía. */
+  async commitPackage(packageId: string): Promise<{ pkg: ReceivedPackage; created: boolean }> {
     const manifest = await this.readManifest(packageId);
+    const deviceName = manifest.device_name;
     const existing = await this.readReceipt(packageId);
-    if (existing) return existing;
+    if (existing) return { pkg: { receipt: existing, deviceName }, created: false };
     if ((await this.missingOf(manifest)).length > 0) {
       throw new TransferError('incomplete_package', 'Faltan archivos por subir');
     }
@@ -237,7 +248,7 @@ export class Inbox {
       files: manifest.files.map((f) => ({ ...f, status: 'stored' as const })),
     };
     await writeAtomic(join(this.dir(packageId), 'receipt.json'), JSON.stringify(receipt));
-    return receipt;
+    return { pkg: { receipt, deviceName }, created: true };
   }
 
   private async packageIds(): Promise<string[]> {
