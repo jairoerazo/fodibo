@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "hash_mismatch",
+    "message": "Mensaje de hash_mismatch"
+  }
+}

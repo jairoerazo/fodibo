@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "package_id": "7b1f3c5e-2a4d-4e8b-9c6a-1d2e3f405162",
+  "created_at": "2026-11-10T21:26:10Z",
+  "device_name": "Pixel 8",
+  "files": [
+    {
+      "file_id": "0c9d8e7f-6a5b-4c3d-8e2f-1a0b9c8d7e6f",
+      "name": "Quittung Zürich 🧾.jpg",
+      "mime": "image/jpeg",
+      "size": 1000,
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ]
+}

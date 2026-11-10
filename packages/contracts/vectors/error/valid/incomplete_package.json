@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "incomplete_package",
+    "message": "Mensaje de incomplete_package"
+  }
+}
