@@ -95,9 +95,9 @@ function expectError(r: Res, status: number, code: string) {
   expect(JSON.stringify(r.json)).not.toMatch(/\bat .*\(|\.ts:\d+/);
 }
 
-function connectCode(port: number): Promise<string> {
+function connectCode(port: number, host = '127.0.0.1'): Promise<string> {
   return new Promise((resolve) => {
-    const s = net.connect({ host: '127.0.0.1', port });
+    const s = net.connect({ host, port });
     s.on('connect', () => {
       s.destroy();
       resolve('CONNECTED');
@@ -170,6 +170,12 @@ describe('TransferService', () => {
     const fp = `sha256:${createHash('sha256').update(r.peerRaw).digest('hex')}`;
     expect(fp).toBe(qr.fp);
     expect(fp).toBe(`sha256:${createHash('sha256').update(new X509Certificate(ca).raw).digest('hex')}`);
+  });
+
+  it('escucha solo en IPv4 (0.0.0.0): por IPv6 (::1) no acepta conexiones', async () => {
+    await boot();
+    expect(await connectCode(qr.port)).toBe('CONNECTED');
+    expect(await connectCode(qr.port, '::1')).not.toBe('CONNECTED');
   });
 
   it('TLS 1.2 forzado en el cliente: falla el handshake', async () => {

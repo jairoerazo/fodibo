@@ -87,7 +87,7 @@ export class TransferServer {
     return new Promise((resolve, reject) => {
       const onError = (err: Error) => reject(err);
       this.server.once('error', onError);
-      this.server.listen(0, () => {
+      this.server.listen(0, '0.0.0.0', () => {
         this.server.off('error', onError);
         resolve((this.server.address() as AddressInfo).port);
       });
