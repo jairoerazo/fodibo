@@ -78,9 +78,20 @@ export class TransferServer {
     tls: { certPem: string; keyPem: string },
     private readonly hooks: ServerHooks,
   ) {
-    this.server = https.createServer({ cert: tls.certPem, key: tls.keyPem, minVersion: 'TLSv1.3' }, (req, res) => {
-      void this.handle(req, res);
-    });
+    this.server = https.createServer(
+      {
+        cert: tls.certPem,
+        key: tls.keyPem,
+        minVersion: 'TLSv1.3',
+        // Sin límite total por petición: una subida de 50 MB en Wi-Fi lenta supera los 5 min por
+        // defecto de Node. Los cuelgues los cubren la inactividad de sesión y el corte del cliente.
+        requestTimeout: 0,
+        headersTimeout: 60_000,
+      },
+      (req, res) => {
+        void this.handle(req, res);
+      },
+    );
   }
 
   listen(): Promise<number> {
