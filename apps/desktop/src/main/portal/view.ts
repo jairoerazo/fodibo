@@ -1,0 +1,116 @@
+// Vista aislada del portal: WebContentsView en la sesión del portal, sin preload y con sandbox.
+// Solo permite navegar dentro de `fodibo-portal://portal/`; mientras el agente está activo,
+// cualquier navegación a la página de envío se cancela y se notifica.
+import { WebContentsView, type BrowserWindow, type Rectangle, type Session, type WebContents } from 'electron';
+import { PORTAL_HOST, PORTAL_SCHEME, PORTAL_START_URL } from './protocol.js';
+
+function parse(url: string): URL | undefined {
+  try {
+    return new URL(url);
+  } catch {
+    return undefined;
+  }
+}
+
+function isPortalUrl(u: URL | undefined): u is URL {
+  return u !== undefined && u.protocol === `${PORTAL_SCHEME}:` && u.host === PORTAL_HOST;
+}
+
+function isSubmitUrl(u: URL): boolean {
+  return /(^|\/)enviado\.html$/i.test(u.pathname);
+}
+
+export class PortalView {
+  private readonly view: WebContentsView;
+  private agentActive = false;
+  private blocked = 0;
+  private readonly listeners = new Set<() => void>();
+  private destroyed = false;
+
+  constructor(
+    private readonly win: BrowserWindow,
+    session: Session,
+  ) {
+    this.view = new WebContentsView({
+      webPreferences: {
+        session,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: false,
+        webSecurity: true,
+        webviewTag: false,
+        navigateOnDragDrop: false,
+        spellcheck: false,
+        backgroundThrottling: false,
+      },
+    });
+    const wc = this.view.webContents;
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    wc.on('will-frame-navigate', (e) => this.guard(e, e.url));
+    wc.on('will-redirect', (e) => this.guard(e, e.url));
+    wc.on('will-attach-webview', (e) => e.preventDefault());
+    win.contentView.addChildView(this.view);
+  }
+
+  get webContents(): WebContents {
+    return this.view.webContents;
+  }
+
+  get blockedSubmits(): number {
+    return this.blocked;
+  }
+
+  private guard(e: { preventDefault(): void }, url: string): void {
+    const u = parse(url);
+    if (!isPortalUrl(u)) {
+      e.preventDefault();
+      return;
+    }
+    if (this.agentActive && isSubmitUrl(u)) {
+      e.preventDefault();
+      this.blocked++;
+      for (const cb of [...this.listeners]) {
+        try {
+          cb();
+        } catch {
+          // Un oyente defectuoso no debe impedir el bloqueo.
+        }
+      }
+    }
+  }
+
+  async load(): Promise<void> {
+    await this.view.webContents.loadURL(PORTAL_START_URL);
+  }
+
+  setBounds(r: Rectangle): void {
+    this.view.setBounds(r);
+  }
+
+  setAgentActive(active: boolean): void {
+    this.agentActive = active;
+  }
+
+  onSubmitBlocked(cb: () => void): void {
+    this.listeners.add(cb);
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.listeners.clear();
+    if (!this.win.isDestroyed()) this.win.contentView.removeChildView(this.view);
+    const wc = this.view.webContents;
+    if (!wc.isDestroyed()) {
+      if (wc.debugger.isAttached()) {
+        try {
+          wc.debugger.detach();
+        } catch {
+          // Ya desconectado.
+        }
+      }
+      wc.close();
+    }
+  }
+}
