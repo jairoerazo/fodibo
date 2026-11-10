@@ -136,6 +136,16 @@ describe('validateAnswer', () => {
     expect(p[1]).toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
   });
 
+  it('misma clave en un select y otro campo de tipo distinto -> ambos tipo_incompatible', () => {
+    const s = step([
+      f({ field_id: 'a', type: 'select', options: ['soltero', 'casado'] }),
+      f({ field_id: 'b', type: 'text' }),
+    ]);
+    const p = plan(s, { a: { source: 'estado_civil', option: 'casado' }, b: { source: 'estado_civil' } });
+    expect(p[0]).toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
+    expect(p[1]).toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
+  });
+
   it('checkbox solo con clave boolean', () => {
     const d2: Declaration = { ...decl, acepta: { tipo: 'boolean', valor: true } };
     const s = step([f({ field_id: 'c', type: 'checkbox' }), f({ field_id: 'd', type: 'checkbox' })]);

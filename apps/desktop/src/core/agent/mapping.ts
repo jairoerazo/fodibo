@@ -144,12 +144,12 @@ export function validateAnswer(
         const entry = decl[source]!;
         if (!typeCompatible(field.type, entry.tipo)) {
           problem = pend(field, 'tipo_incompatible');
+        } else if ((typesByKey.get(source)?.size ?? 0) > 1) {
+          problem = pend(field, 'tipo_incompatible');
         } else if (field.type === 'select') {
           if (p.option === undefined || !(field.options ?? []).includes(p.option)) {
             problem = pend(field, 'tipo_incompatible');
           } else value = p.option;
-        } else if ((typesByKey.get(source)?.size ?? 0) > 1) {
-          problem = pend(field, 'tipo_incompatible');
         } else value = formatForField(entry, field);
       }
     }
