@@ -56,7 +56,7 @@ class TransferClient {
         final body = await _call(http, 'POST', base.resolve('/v1/pair'),
             json: {'secret': qr.secret, 'device_name': deviceName},
             unauthorizedCode: 'invalid_secret');
-        final token = (body as Map?)?['session_token'];
+        final token = body is Map ? body['session_token'] : null;
         if (token is! String) {
           throw const TransferException('invalid_response', 'Respuesta de emparejado inválida');
         }
@@ -79,6 +79,10 @@ class TransferClient {
 
   /// Anuncia, sube solo lo que falta y confirma. Reintenta errores de red y 5xx
   /// (volviendo a anunciar); los rechazos definitivos de un archivo llevan su hash.
+  ///
+  /// Si tras los reintentos el PC sigue rechazando la conexión (puerto
+  /// cerrado: «Detener», inactividad, QR regenerado), lanza `session_closed`:
+  /// el servidor solo escucha mientras hay sesión (spec §6).
   Future<Receipt> send(
     List<LocalFile> files, {
     String? packageId,
@@ -91,7 +95,12 @@ class TransferClient {
       try {
         return await _attempt(manifest, files, mismatches, onProgress);
       } on _Retryable catch (e) {
-        if (retries == retryDelays.length) throw e.toException();
+        if (retries == retryDelays.length) {
+          if (e.refused) {
+            throw TransferException('session_closed', 'El PC cerró la sesión: ${e.message}');
+          }
+          throw e.toException();
+        }
         await _sleep(retryDelays[retries++]);
       }
     }
@@ -128,7 +137,7 @@ class TransferClient {
   ) async {
     final pkg = manifest.packageId;
     final announced = await _authed('POST', '/v1/packages', json: manifest.toJson());
-    final missingRaw = (announced as Map?)?['missing'];
+    final missingRaw = announced is Map ? announced['missing'] : null;
     if (missingRaw is! List || missingRaw.any((s) => s is! String)) {
       throw const TransferException('invalid_response', 'Respuesta de anuncio inválida');
     }
@@ -159,7 +168,8 @@ class TransferClient {
 
     final receipt = await _authed('POST', '/v1/packages/$pkg/commit');
     try {
-      return Receipt.fromJson(receipt as Map<String, Object?>);
+      if (receipt is! Map<String, Object?>) throw const FormatException('no es un objeto');
+      return Receipt.fromJson(receipt);
     } on Object catch (e) {
       throw TransferException('invalid_response', 'Recibo inválido: $e');
     }
@@ -184,7 +194,7 @@ class TransferClient {
     String unauthorizedCode = 'session_closed',
   }) async {
     final int status;
-    final String text;
+    final String? text; // null: el cuerpo no es UTF-8
     try {
       final req = await http.openUrl(method, uri);
       if (token != null) req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
@@ -202,7 +212,12 @@ class TransferClient {
       }
       final res = await req.close().timeout(_timeout);
       status = res.statusCode;
-      text = await utf8.decodeStream(res).timeout(_timeout);
+      final bytes = await res
+          .fold<BytesBuilder>(BytesBuilder(copy: false), (b, chunk) => b..add(chunk))
+          .timeout(_timeout);
+      text = _utf8OrNull(bytes.takeBytes());
+    } on SocketException catch (e) {
+      throw _Retryable(e.toString(), refused: _isRefused(e));
     } on IOException catch (e) {
       throw _Retryable(e.toString());
     } on TimeoutException catch (e) {
@@ -211,6 +226,7 @@ class TransferClient {
 
     Object? body;
     try {
+      if (text == null) throw const FormatException('no es UTF-8');
       body = text.isEmpty ? null : jsonDecode(text);
     } on FormatException {
       body = null;
@@ -226,6 +242,23 @@ class TransferClient {
     if (status >= 500) throw _Retryable(message, status: status, code: code);
     if (status == 401) throw TransferException(unauthorizedCode, message);
     throw TransferException(code, message);
+  }
+
+  static String? _utf8OrNull(List<int> bytes) {
+    try {
+      return utf8.decode(bytes);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// Conexión rechazada: el host responde pero el puerto está cerrado
+  /// (ECONNREFUSED: 61 en macOS/iOS, 111 en Linux/Android, 10061 en Windows).
+  static bool _isRefused(SocketException e) {
+    final errno = e.osError?.errorCode;
+    if (errno == 61 || errno == 111 || errno == 10061) return true;
+    final text = '${e.message} ${e.osError?.message ?? ''}'.toLowerCase();
+    return text.contains('connection refused');
   }
 
   /// Sube el archivo en streaming; aborta si deja de avanzar durante [_timeout].
@@ -259,7 +292,10 @@ class _Retryable implements Exception {
   final String message;
   final int? status;
   final String? code;
-  _Retryable(this.message, {this.status, this.code});
+
+  /// Conexión rechazada (puerto cerrado), no una red caída.
+  final bool refused;
+  _Retryable(this.message, {this.status, this.code, this.refused = false});
 
   TransferException toException() => status == null
       ? TransferException('unreachable', message)

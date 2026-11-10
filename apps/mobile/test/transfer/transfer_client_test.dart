@@ -172,12 +172,51 @@ void main() {
     expect(sleeps, [const Duration(seconds: 1)]);
   });
 
-  test('reintentos agotados: 4 esperas 1, 2, 4, 8 s y unreachable', () async {
+  test('reintentos agotados (el PC no responde): 4 esperas 1, 2, 4, 8 s y unreachable', () async {
     final files = await threeFiles();
-    final client = await connect(server.qr());
-    await server.close();
+    final proxy = await TcpCounter.start(server.port);
+    addTearDown(proxy.close);
+    final qr = server.qr();
+    final client = await connect(QrPayload(
+        hosts: qr.hosts, port: proxy.port, fp: qr.fp, secret: qr.secret, exp: qr.exp));
+    proxy.dropAll();
     await expectLater(client.send(files), throwsTransfer('unreachable'));
     expect(sleeps, [for (final s in [1, 2, 4, 8]) Duration(seconds: s)]);
+  });
+
+  test('el PC detiene la sesión a mitad (puerto cerrado): session_closed tras reintentar', () async {
+    final files = await threeFiles();
+    final client = await connect(server.qr());
+    expect((await client.send([files[0]])).files, hasLength(1));
+    await server.close(); // «Detener», inactividad o QR regenerado: el PC deja de escuchar
+    await expectLater(client.send(files), throwsTransfer('session_closed'));
+    expect(sleeps, [for (final s in [1, 2, 4, 8]) Duration(seconds: s)]);
+  });
+
+  group('respuestas malformadas: invalid_response', () {
+    final notUtf8 = [0xff, 0xfe, 0xfd];
+    final cases = <String, List<int>>{
+      'pair con lista JSON': '[1,2]'.codeUnits,
+      'pair con bytes no UTF-8': notUtf8,
+      'announce con lista JSON': '[1]'.codeUnits,
+      'announce con texto no JSON': 'hola'.codeUnits,
+      'announce con bytes no UTF-8': notUtf8,
+      'commit con lista JSON': '[]'.codeUnits,
+      'commit con bytes no UTF-8': notUtf8,
+    };
+    for (final MapEntry(key: name, value: raw) in cases.entries) {
+      test(name, () async {
+        final kind = name.split(' ').first;
+        server.rawOk[kind] = raw;
+        final files = [await file('a.jpg', 100, 1)];
+        if (kind == 'pair') {
+          await expectLater(connect(server.qr()), throwsTransfer('invalid_response'));
+        } else {
+          final client = await connect(server.qr());
+          await expectLater(client.send(files), throwsTransfer('invalid_response'));
+        }
+      });
+    }
   });
 
   test('solo sube los hashes de missing', () async {

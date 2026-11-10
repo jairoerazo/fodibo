@@ -51,6 +51,10 @@ class FakeServer {
   /// Hashes que el servidor «ya tiene»: no aparecen en `missing`.
   final alreadyHave = <String>{};
 
+  /// Responde 200 con estos bytes crudos en lugar del JSON correcto
+  /// (`pair`, `announce`, `commit`).
+  final rawOk = <String, List<int>>{};
+
   FakeServer._(this._server, this.secret) {
     _server.listen(_handle);
   }
@@ -99,6 +103,7 @@ class FakeServer {
   Future<void> _route(HttpRequest req) async {
     final path = req.uri.path;
     if (req.method == 'POST' && path == '/v1/pair') {
+      if (await _maybeRaw(req, 'pair')) return;
       final body = await _readJson(req);
       if (body['secret'] != secret) throw _Err(401, 'invalid_secret');
       _token = 'tok-${DateTime.now().microsecondsSinceEpoch}';
@@ -113,14 +118,28 @@ class FakeServer {
     if (req.method == 'POST' && path == '/v1/packages') {
       announces++;
       _maybe500('announce');
+      if (await _maybeRaw(req, 'announce')) return;
       return _announce(req);
     } else if (req.method == 'PUT' && put != null) {
       return _put(req, put[1]!, put[2]!);
     } else if (req.method == 'POST' && commit != null) {
       _maybe500('commit');
+      if (await _maybeRaw(req, 'commit')) return;
       return _commit(req, commit[1]!);
     }
     throw _Err(404, 'not_found');
+  }
+
+  Future<bool> _maybeRaw(HttpRequest req, String kind) async {
+    final raw = rawOk.remove(kind);
+    if (raw == null) return false;
+    await req.drain<void>();
+    req.response
+      ..statusCode = 200
+      ..headers.contentType = ContentType.json
+      ..add(raw);
+    await req.response.close();
+    return true;
   }
 
   void _maybe500(String kind) {
@@ -242,12 +261,31 @@ class _Err implements Exception {
 class TcpCounter {
   final ServerSocket _socket;
   int connections = 0;
+  var _dropping = false;
+  final _open = <Socket>[];
+
+  /// Corta las conexiones abiertas y cierra cada conexión nueva nada más
+  /// aceptarla: el puerto sigue abierto pero nadie responde (Wi-Fi caída o PC
+  /// colgado), a diferencia de un puerto cerrado.
+  void dropAll() {
+    _dropping = true;
+    for (final s in _open) {
+      s.destroy();
+    }
+    _open.clear();
+  }
 
   TcpCounter._(this._socket, int targetPort) {
     _socket.listen((client) async {
       connections++;
+      if (_dropping) {
+        client.destroy();
+        return;
+      }
+      _open.add(client);
       try {
         final upstream = await Socket.connect('127.0.0.1', targetPort);
+        _open.add(upstream);
         client.cast<List<int>>().pipe(upstream).catchError((_) {});
         upstream.cast<List<int>>().pipe(client).catchError((_) {});
       } catch (_) {
