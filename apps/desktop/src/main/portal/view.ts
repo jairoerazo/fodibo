@@ -1,8 +1,9 @@
 // Vista aislada del portal: WebContentsView en la sesión del portal, sin preload y con sandbox.
-// Solo permite navegar dentro de `fodibo-portal://portal/`; mientras el agente está activo,
-// cualquier navegación a la página de envío se cancela y se notifica.
+// Solo permite navegar dentro de `fodibo-portal://portal/`. Mientras el agente está activo rige una
+// lista blanca: solo se permite navegar a `index.html` (normalizado con la misma función que usa el
+// servidor del protocolo); cualquier otra navegación se cancela y cuenta como envío bloqueado.
 import { WebContentsView, type BrowserWindow, type Rectangle, type Session, type WebContents } from 'electron';
-import { PORTAL_HOST, PORTAL_SCHEME, PORTAL_START_URL } from './protocol.js';
+import { PORTAL_HOST, PORTAL_SCHEME, PORTAL_START_URL, portalFileOf } from './protocol.js';
 
 function parse(url: string): URL | undefined {
   try {
@@ -14,10 +15,6 @@ function parse(url: string): URL | undefined {
 
 function isPortalUrl(u: URL | undefined): u is URL {
   return u !== undefined && u.protocol === `${PORTAL_SCHEME}:` && u.host === PORTAL_HOST;
-}
-
-function isSubmitUrl(u: URL): boolean {
-  return /(^|\/)enviado\.html$/i.test(u.pathname);
 }
 
 export class PortalView {
@@ -67,7 +64,7 @@ export class PortalView {
       e.preventDefault();
       return;
     }
-    if (this.agentActive && isSubmitUrl(u)) {
+    if (this.agentActive && portalFileOf(url) !== 'index.html') {
       e.preventDefault();
       this.blocked++;
       for (const cb of [...this.listeners]) {

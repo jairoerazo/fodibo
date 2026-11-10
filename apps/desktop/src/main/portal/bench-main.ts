@@ -175,6 +175,17 @@ export async function runAdapterSelftest(): Promise<number> {
     await sleep(300);
     check('envío bloqueado con agente activo', blocked && submitBlockedEvents === 1 && wc.getURL().endsWith('/index.html'), wc.getURL());
 
+    // Variantes de la URL de envío iniciadas por la página: todas bloqueadas y contadas.
+    for (const target of ['enviado.html/?d=W10', 'enviado%2Ehtml?d=W10', 'ENVIADO.HTML?d=W10', './sub/../enviado.html?d=W10', 'declaracion.json']) {
+      const before = view.blockedSubmits;
+      await wc.executeJavaScript(`location.assign(new URL(${JSON.stringify(target)}, location.href).href)`);
+      const ok = await waitFor(() => view.blockedSubmits === before + 1, 3000);
+      await sleep(200);
+      check(`variante bloqueada: ${target}`, ok && wc.getURL().endsWith('/index.html'), `${view.blockedSubmits} ${wc.getURL()}`);
+    }
+    const blockedTotal = view.blockedSubmits;
+    check('oyente notificado en cada bloqueo', submitBlockedEvents === blockedTotal, String(submitBlockedEvents));
+
     // Red: una petición fuera del protocolo se cancela en la sesión.
     const net = (await wc.executeJavaScript(
       `fetch('https://example.com/', { mode: 'no-cors' }).then(() => 'ok', (e) => 'error: ' + e.message)`,
@@ -190,16 +201,20 @@ export async function runAdapterSelftest(): Promise<number> {
       );
     const proto = await Promise.all([
       probe('fodibo-portal://portal/portal.js'),
+      probe('fodibo-portal://portal/enviado.html'),
       probe('fodibo-portal://portal/declaracion.json'),
+      probe('fodibo-portal://portal/esperado.json'),
+      probe('fodibo-portal://portal/enviado.html/'),
+      probe('fodibo-portal://portal/enviado%2Ehtml'),
       probe('fodibo-portal://portal/..%2f..%2fpackage.json'),
       probe('fodibo-portal://portal/%2e%2e/%2e%2e/package.json'),
       probe('fodibo-portal://portal/__tests__/portal.test.ts'),
       probe('fodibo-portal://otro/index.html'),
     ]);
     check(
-      'protocolo: MIME y rechazo de rutas fuera de la raíz',
+      'protocolo: MIME, lista blanca (sin *.json) y rechazo de rutas fuera de la raíz',
       proto[0] === '200 text/javascript; charset=utf-8' &&
-        proto[1] === '200 application/json; charset=utf-8' &&
+        proto[1] === '200 text/html; charset=utf-8' &&
         proto.slice(2).every((x) => x.startsWith('404') || x === 'error'),
       proto.join(' | '),
     );
@@ -219,7 +234,7 @@ export async function runAdapterSelftest(): Promise<number> {
     view.setAgentActive(false);
     await wc.executeJavaScript(submitJs);
     const navigated = await waitFor(() => wc.getURL().includes('/enviado.html'), 5000);
-    check('envío manual navega a enviado.html', navigated && view.blockedSubmits === 1, wc.getURL().slice(0, 80));
+    check('envío manual navega a enviado.html', navigated && view.blockedSubmits === blockedTotal, wc.getURL().slice(0, 80));
   } catch (e) {
     check('excepción', false, e instanceof Error ? (e.stack ?? e.message) : String(e));
   } finally {

@@ -14,7 +14,6 @@ const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
 };
 
 /** Raíz del portal en la build: `out/test-portal`, junto a `out/main`. */
@@ -33,8 +32,16 @@ export function blockedRequests(ses: Session): readonly string[] {
   return blocked.get(ses) ?? [];
 }
 
-/** Devuelve el archivo dentro de `root` que corresponde a la URL, o `undefined` si no es válida. */
-export async function resolvePortalFile(root: string, rawUrl: string): Promise<string | undefined> {
+/** Únicos archivos que el portal puede pedir. Los datos de prueba (`*.json`) no se sirven. */
+export const PORTAL_FILES: readonly string[] = ['index.html', 'portal.js', 'portal.css', 'enviado.html', 'enviado.js'];
+
+/**
+ * Normaliza la URL a un nombre de archivo del portal (p. ej. `index.html`) o `undefined`.
+ * Es la ÚNICA normalización: la usan tanto el servidor del protocolo como la guarda de navegación
+ * de la vista, para que ambos interpreten la misma URL igual. Coincidencia exacta con la lista blanca
+ * y con la ruta canónica; cualquier variante (`enviado.html/`, `enviado%2Ehtml`, `ENVIADO.HTML`) se rechaza.
+ */
+export function portalFileOf(rawUrl: string): string | undefined {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -49,12 +56,20 @@ export async function resolvePortalFile(root: string, rawUrl: string): Promise<s
     return undefined;
   }
   const segments = path.split(/[\\/]+/).filter((s) => s !== '');
-  if (segments.length === 0) return undefined;
-  if (segments.some((s) => s === '..' || s === '.' || s.includes('\0') || s.startsWith('__'))) return undefined;
-  if (!(extname(path).toLowerCase() in MIME)) return undefined;
+  if (segments.length !== 1) return undefined;
+  const name = segments[0] as string;
+  // Solo la forma canónica `/<nombre>`: sin barra final, sin escapes, sin `.`/`..`, sensible a mayúsculas.
+  if (!PORTAL_FILES.includes(name) || url.pathname !== `/${name}`) return undefined;
+  return name;
+}
+
+/** Devuelve el archivo dentro de `root` que corresponde a la URL, o `undefined` si no está permitido. */
+export async function resolvePortalFile(root: string, rawUrl: string): Promise<string | undefined> {
+  const name = portalFileOf(rawUrl);
+  if (!name) return undefined;
   try {
     const realRoot = await realpath(root);
-    const file = await realpath(join(realRoot, ...segments));
+    const file = await realpath(join(realRoot, name));
     if (!file.startsWith(realRoot + sep)) return undefined;
     return file;
   } catch {
