@@ -4,3 +4,7 @@ export { formatForField, normalize, typeCompatible } from './format.js';
 export { responseSchema, validateAnswer } from './mapping.js';
 export type { ModelAnswer, FieldPlan } from './mapping.js';
 export { buildMessages } from './prompt.js';
+export { createLlamaClient, ModelError } from "./model-client.js";
+export type { ModelClient, ChatMessage } from "./model-client.js";
+export { AgentOrchestrator } from "./orchestrator.js";
+export type { AgentState, AgentEvent } from "./orchestrator.js";
