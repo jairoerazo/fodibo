@@ -2,7 +2,17 @@ import 'package:flutter/material.dart';
 
 import '../transfer/contracts.dart';
 
-/// Lista de archivos que el PC confirmó.
+/// Tamaño legible con coma decimal, igual que la tarjeta del PC:
+/// 2 481 930 bytes → «2,4 MB».
+String formatSize(int bytes) {
+  String one(double n) => n.toStringAsFixed(1).replaceAll('.', ',');
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${one(bytes / 1024)} KB';
+  return '${one(bytes / (1024 * 1024))} MB';
+}
+
+/// Lista de archivos que el PC confirmó: el mismo recibo que la tarjeta del PC
+/// (nombre, tipo, tamaño e integridad verificada; spec §2).
 class ReceiptView extends StatelessWidget {
   final Receipt receipt;
   final VoidCallback onSendMore;
@@ -23,7 +33,8 @@ class ReceiptView extends StatelessWidget {
                 ListTile(
                   leading: const Icon(Icons.check_circle),
                   title: Text(f.name),
-                  subtitle: Text('${f.size} bytes'),
+                  subtitle: Text('${f.mime} · ${formatSize(f.size)}\n✓ Integridad verificada'),
+                  isThreeLine: true,
                 ),
             ],
           ),
