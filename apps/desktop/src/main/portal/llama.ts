@@ -35,6 +35,8 @@ export class LlamaServer {
   private starting?: Promise<string>;
   private baseUrl?: string;
   private stopping = false;
+  /** Se incrementa en cada `stop()`: invalida los arranques en curso. */
+  private gen = 0;
   private readonly onExit = (): void => {
     try {
       this.child?.kill('SIGKILL');
@@ -59,7 +61,9 @@ export class LlamaServer {
     const { binary, modelPath } = this.opts;
     if (!existsSync(modelPath)) throw new Error(MSG_NO_MODEL);
     this.stopping = false;
+    const gen = this.gen;
     const port = await freePort();
+    if (gen !== this.gen) throw new Error('Arranque del modelo cancelado.');
     const baseUrl = `http://127.0.0.1:${port}`;
     const spawn = this.opts.spawn ?? nodeSpawn;
     const args = [...(this.opts.args ?? []), '-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-c', '8192', '--temp', '0'];
@@ -132,6 +136,7 @@ export class LlamaServer {
   }
 
   async stop(): Promise<void> {
+    this.gen++;
     const child = this.child;
     this.baseUrl = undefined;
     if (!child) return;

@@ -90,4 +90,39 @@ describe('LlamaServer', () => {
     expect(alive(pid)).toBe(false);
     await server.stop(); // idempotente
   });
+
+  it('stop() durante el arranque cancela de inmediato y no deja proceso', async () => {
+    const sleeper = join(dir, 'sleep2.mjs');
+    writeFileSync(
+      sleeper,
+      `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify({ pid: process.pid })); setInterval(() => {}, 1000);`,
+    );
+    server = new LlamaServer({ binary: process.execPath, args: [sleeper], modelPath: model, healthTimeoutMs: 60000 });
+    const t0 = Date.now();
+    const p = server.start();
+    p.catch(() => {});
+    await new Promise((r) => setTimeout(r, 700));
+    await server.stop();
+    await expect(p).rejects.toThrow(/cancelado/);
+    expect(Date.now() - t0).toBeLessThan(10000);
+    const { pid } = JSON.parse((await import('node:fs')).readFileSync(pidFile, 'utf8')) as { pid: number };
+    expect(alive(pid)).toBe(false);
+  });
+
+  it('stop() inmediatamente tras start() (antes de lanzar) no lanza el proceso', async () => {
+    let spawned = 0;
+    server = new LlamaServer({
+      binary: 'x',
+      modelPath: model,
+      spawn: (() => {
+        spawned++;
+        throw new Error('no debe lanzarse');
+      }) as never,
+    });
+    const p = server.start();
+    p.catch(() => {});
+    await server.stop();
+    await expect(p).rejects.toThrow(/cancelado/);
+    expect(spawned).toBe(0);
+  });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentUiEvent } from '../../../shared/agent-ipc.js';
 import { AgentController, createLlamaFromEnv, registerAgentIpc, type AdapterLike, type ViewLike } from '../agent-ipc.js';
 
-function setup(opts: { llamaStart?: () => Promise<string>; modelComplete?: () => Promise<unknown>; hang?: boolean } = {}) {
+function setup(opts: { blocked?: () => number; llamaStart?: () => Promise<string>; modelComplete?: () => Promise<unknown>; hang?: boolean } = {}) {
   const calls: string[] = [];
   const events: AgentUiEvent[] = [];
   let blockedCb: (() => void) | undefined;
@@ -10,7 +10,9 @@ function setup(opts: { llamaStart?: () => Promise<string>; modelComplete?: () =>
     load: async () => void calls.push('load'),
     setBounds: (r) => void calls.push(`bounds:${r.width}`),
     setAgentActive: (a) => void calls.push(`active:${a}`),
-    blockedSubmits: 0,
+    get blockedSubmits() {
+      return opts.blocked?.() ?? 0;
+    },
     onSubmitBlocked: (cb) => void (blockedCb = cb),
     destroy: () => void calls.push('destroy'),
   };
@@ -25,9 +27,13 @@ function setup(opts: { llamaStart?: () => Promise<string>; modelComplete?: () =>
     leerCampo: async () => '',
     avanzarPaso: async () => {},
   };
+  let cancelStart: (() => void) | undefined;
   const llama = {
     start: opts.llamaStart ?? (async () => 'http://127.0.0.1:1'),
-    stop: async () => void calls.push('llama-stop'),
+    stop: async () => {
+      calls.push('llama-stop');
+      cancelStart?.();
+    },
   };
   const c = new AgentController({
     createView: () => ({ view, adapter }),
@@ -134,5 +140,47 @@ describe('AgentController', () => {
     await handlers.get('agent:stop')!({});
     off();
     expect(removed).toHaveLength(5);
+  });
+
+  it('stop durante el arranque del modelo termina la ejecución como detenida', async () => {
+    let rej!: (e: Error) => void;
+    const { c, events } = setup({ llamaStart: () => new Promise<string>((_r, j) => (rej = j)) });
+    await c.openPortal();
+    const p = c.start();
+    c.stop();
+    rej(new Error('Arranque del modelo cancelado.'));
+    await p;
+    expect(events).toContainEqual({ type: 'state', state: 'detenido' });
+    expect(events.some((e) => e.type === 'model' && e.status === 'error')).toBe(false);
+    expect(c.isRunning).toBe(false);
+  });
+
+  it('dispose durante el arranque resuelve sin esperar al modelo', async () => {
+    let rej!: (e: Error) => void;
+    const { c, calls } = setup({ llamaStart: () => new Promise<string>((_r, j) => (rej = j)) });
+    await c.openPortal();
+    const p = c.start().catch(() => {});
+    const t0 = Date.now();
+    // llama.stop() cancela el arranque pendiente, como hace LlamaServer.
+    const dispose = c.dispose();
+    rej(new Error('Arranque del modelo cancelado.'));
+    await Promise.all([dispose, p]);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(calls.indexOf('llama-stop')).toBeGreaterThan(-1);
+    expect(calls).toContain('destroy');
+  });
+
+  it('blockedSubmits es por ejecución', async () => {
+    let n = 5;
+    const { c, events } = setup({ blocked: () => n, hang: true });
+    await c.openPortal();
+    await c.start();
+    n = 7;
+    const second = c.start();
+    await new Promise((r) => setTimeout(r, 20));
+    n = 9;
+    await second;
+    const fin = events.filter((e) => e.type === 'finished') as { blockedSubmits: number }[];
+    expect(fin.map((f) => f.blockedSubmits)).toEqual([0, 2]);
   });
 });

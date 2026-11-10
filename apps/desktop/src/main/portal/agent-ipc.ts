@@ -43,6 +43,7 @@ export class AgentController {
   private orchestrator?: AgentOrchestrator;
   private running?: Promise<void>;
   private stopRequested = false;
+  private startingModel = false;
 
   constructor(private readonly deps: AgentDeps) {}
 
@@ -97,6 +98,8 @@ export class AgentController {
   stop(): void {
     this.stopRequested = true;
     this.orchestrator?.stop();
+    // Durante el arranque del modelo aún no hay orquestador: se cancela la espera de salud.
+    if (this.startingModel) void this.deps.getLlama().stop().catch(() => {});
   }
 
   /** Resuelve cuando termina la ejecución. Rechaza con un mensaje legible si no pudo empezar. */
@@ -119,11 +122,18 @@ export class AgentController {
     let declaration: Declaration;
     try {
       declaration = this.deps.loadDeclaration();
+      this.startingModel = true;
       baseUrl = await this.deps.getLlama().start();
     } catch (err) {
+      if (this.stopRequested) {
+        emit({ type: 'state', state: 'detenido' });
+        return;
+      }
       const message = errMsg(err);
       emit({ type: 'model', status: 'error', message });
       throw new Error(message);
+    } finally {
+      this.startingModel = false;
     }
     if (this.stopRequested) {
       emit({ type: 'state', state: 'detenido' });
@@ -132,6 +142,7 @@ export class AgentController {
     emit({ type: 'model', status: 'listo' });
 
     // Los eventos finales se retienen hasta entregar el control (detach → setAgentActive(false)).
+    const baseline = cur.view.blockedSubmits;
     const held: AgentEvent[] = [];
     const onEvent = (e: AgentEvent): void => {
       const terminal = e.type === 'finished' || (e.type === 'state' && ['entregado', 'detenido', 'error'].includes(e.state));
@@ -147,7 +158,7 @@ export class AgentController {
         model: (this.deps.createModel ?? ((u: string) => createLlamaClient(u)))(baseUrl),
         declaration,
         onEvent,
-        getBlockedSubmits: () => cur.view.blockedSubmits,
+        getBlockedSubmits: () => cur.view.blockedSubmits - baseline,
       });
       this.orchestrator = orchestrator;
       if (this.stopRequested) orchestrator.stop();
@@ -167,6 +178,8 @@ export class AgentController {
 
   async dispose(): Promise<void> {
     this.stop();
+    // Primero se apaga el modelo: así un arranque pendiente termina de inmediato.
+    await this.deps.getLlama().stop();
     await this.running;
     this.destroyView();
     await this.deps.getLlama().stop();

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AgentState, FieldResult, PendingReason } from '../../core/agent/index.js';
 import type { AgentUiEvent } from '../../shared/agent-ipc.js';
 import { cleanIpcError } from '../format.js';
@@ -94,11 +94,18 @@ export function AgentPanel({ visible }: { visible: boolean }) {
     const ro = new ResizeObserver(sendBounds);
     ro.observe(el);
     window.addEventListener('resize', sendBounds);
+    window.addEventListener('scroll', sendBounds, true);
     return () => {
       ro.disconnect();
       window.removeEventListener('resize', sendBounds);
+      window.removeEventListener('scroll', sendBounds, true);
     };
   }, [visible, portalOpen, sendBounds]);
+
+  // El contenido variable de encima (error, estado, registro) desplaza el hueco sin cambiar su tamaño.
+  useLayoutEffect(() => {
+    sendBounds();
+  }, [error, log, pending, agentState, stateMessage, modelStatus, sendBounds]);
 
   const open = async () => {
     setError(undefined);

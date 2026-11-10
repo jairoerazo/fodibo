@@ -88,4 +88,17 @@ describe('AgentPanel', () => {
     rerender(<AgentPanel visible={false} />);
     expect(api.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
   });
+
+  it('reenvía los límites cuando aparece un error y desplaza el hueco', () => {
+    let top = 100;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () => ({ x: 10, y: top, width: 300, height: 200, top, left: 10, right: 310, bottom: top + 200, toJSON() {} }) as DOMRect,
+    );
+    render(<AgentPanel visible />);
+    expect(api.setBounds).toHaveBeenLastCalledWith({ x: 10, y: 100, width: 300, height: 200 });
+    top = 160;
+    emit({ type: 'model', status: 'error', message: 'fallo' });
+    expect(api.setBounds).toHaveBeenLastCalledWith({ x: 10, y: 160, width: 300, height: 200 });
+    vi.restoreAllMocks();
+  });
 });
