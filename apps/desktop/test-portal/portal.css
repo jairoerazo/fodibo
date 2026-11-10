@@ -1,0 +1,14 @@
+body { font-family: system-ui, sans-serif; background: #f4f5f7; color: #1a1a1a; margin: 0; }
+main { max-width: 640px; margin: 2rem auto; background: #fff; padding: 1.5rem 2rem; border-radius: 8px; }
+.field { display: grid; gap: 0.25rem; margin-bottom: 1rem; }
+.field label { font-weight: 600; }
+input[required]:not([type=checkbox]) + .help::before, select[required] + .help::before { content: "* "; }
+input, select { padding: 0.4rem; font: inherit; }
+.help { color: #666; }
+[aria-invalid="true"] { border: 2px solid #c0392b; }
+.errors { color: #c0392b; }
+.warnings { color: #9a6700; }
+.summary { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+.summary th, .summary td { text-align: left; border-bottom: 1px solid #ddd; padding: 0.3rem; }
+.nav { display: flex; gap: 0.5rem; justify-content: flex-end; }
+button { padding: 0.5rem 1rem; font: inherit; }
