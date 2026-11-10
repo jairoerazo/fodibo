@@ -184,6 +184,9 @@ describe('AgentOrchestrator', () => {
     o = new AgentOrchestrator({ adapter, model: goodModel(), declaration: decl, onEvent });
     await o.run();
     expect(calls).toEqual(['obs', 'fill:a']);
+    const fin = finished(events)[0]!;
+    expect(fin.results.map((r) => r.field_id)).toEqual(['a']);
+    expect(fin.pending[0]!.outcome).toMatchObject({ kind: 'pending', reason: 'no_verificado', detail: 'detenido antes de verificar' });
     expect(states(events).at(-1)).toBe('detenido');
     expect(finished(events)).toHaveLength(1);
   });
@@ -202,6 +205,44 @@ describe('AgentOrchestrator', () => {
     o2.stop();
     expect(finished(c.events)).toHaveLength(1);
     expect(states(c.events).at(-1)).toBe('entregado');
+  });
+
+  it('el registro cubre observación, asignaciones, valor escrito, verificación y avance', async () => {
+    const { adapter } = fakeAdapter({ read: (id, w) => (id === 'b' ? 'mal' : w) });
+    const { events, onEvent } = collect();
+    await new AgentOrchestrator({ adapter, model: goodModel(), declaration: decl, onEvent }).run();
+    const logs = events.flatMap((e) => (e.type === 'log' ? [e.text] : []));
+    const has = (re: RegExp) => expect(logs.some((l) => re.test(l)), String(re)).toBe(true);
+    has(/Observando/);
+    has(/Escribiendo a ← Muster \(desde apellido\)/);
+    has(/Verificado a/);
+    has(/No se pudo verificar b: escrito "05\.03\.1980", leído "mal"/);
+    has(/c: pendiente \(sin_dato\)/);
+    has(/g: valor previo correcto/);
+    has(/Avanzando/);
+  });
+
+  it('el registro incluye omitido y error de portal', async () => {
+    const l = steps();
+    l[0]!.fields[0]!.required = false;
+    const { adapter } = fakeAdapter({ list: l });
+    let obs = 0;
+    adapter.observarPaso = async () => { obs++; return obs === 1 ? l[0]! : { ...l[0]!, errors: ['Fehler'] }; };
+    const model: ModelClient = { async complete() { return { a: { skip: true }, b: { skip: true } }; } };
+    const { events, onEvent } = collect();
+    await new AgentOrchestrator({ adapter, model, declaration: decl, onEvent }).run();
+    const logs = events.flatMap((e) => (e.type === 'log' ? [e.text] : []));
+    expect(logs.some((x) => /a: omitido/.test(x))).toBe(true);
+    expect(logs.some((x) => /no deja avanzar: Fehler/.test(x))).toBe(true);
+  });
+
+  it('getBlockedSubmits rellena finished.blockedSubmits (0 por defecto)', async () => {
+    const a = collect();
+    await new AgentOrchestrator({ adapter: fakeAdapter().adapter, model: goodModel(), declaration: decl, onEvent: a.onEvent, getBlockedSubmits: () => 3 }).run();
+    expect(finished(a.events)[0]!.blockedSubmits).toBe(3);
+    const b = collect();
+    await new AgentOrchestrator({ adapter: fakeAdapter().adapter, model: goodModel(), declaration: decl, onEvent: b.onEvent }).run();
+    expect(finished(b.events)[0]!.blockedSubmits).toBe(0);
   });
 
   it('rellenarCampo solo recibe valores de la declaración o de las opciones', async () => {

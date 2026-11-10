@@ -29,6 +29,7 @@ export class AgentOrchestrator {
       declaration: Declaration;
       onEvent: (e: AgentEvent) => void;
       maxSteps?: number;
+      getBlockedSubmits?: () => number;
     },
   ) {}
 
@@ -51,6 +52,14 @@ export class AgentOrchestrator {
     if (this.stopped && final.state === 'entregado') final = { state: 'detenido' };
     this.finish(final);
     return this.results;
+  }
+
+  private safeBlocked(): number {
+    try {
+      return this.opts.getBlockedSubmits?.() ?? 0;
+    } catch {
+      return 0;
+    }
   }
 
   private emit(e: AgentEvent): void {
@@ -79,7 +88,7 @@ export class AgentOrchestrator {
       type: 'finished',
       results: this.results,
       pending: this.results.filter((r) => r.outcome.kind === 'pending'),
-      blockedSubmits: 0,
+      blockedSubmits: this.safeBlocked(),
     });
   }
   private record(step: ObservedStep, field: FieldPlan['field'], outcome: FieldOutcome): void {
@@ -99,11 +108,15 @@ export class AgentOrchestrator {
     const { adapter } = this.opts;
     const maxSteps = this.opts.maxSteps ?? 10;
     this.check();
+    this.log('Observando el paso actual');
     let step = await adapter.observarPaso();
     for (let n = 0; ; n++) {
       this.check();
       if (step.isSummary) return;
-      if (n >= maxSteps) throw new Error('el portal no llega al resumen');
+      if (n >= maxSteps) {
+        this.log(`Se superó el máximo de ${maxSteps} pasos sin llegar al resumen`);
+        throw new Error('el portal no llega al resumen');
+      }
       this.emit({ type: 'state', state: 'rellenando', step: step.index });
       this.log(`Paso ${step.index}/${step.total}: ${step.title}`);
       const plan = await this.plan(step);
@@ -112,11 +125,14 @@ export class AgentOrchestrator {
         for (const f of step.fields)
           this.record(step, f, { kind: 'pending', reason: 'modelo_sin_respuesta', candidates: [] });
       this.check();
+      this.log(`Avanzando desde el paso ${step.index}`);
       await adapter.avanzarPaso();
       this.check();
+      this.log('Observando el nuevo paso');
       const next = await adapter.observarPaso();
       this.check();
       if (next.index <= step.index && !next.isSummary && next.errors.length > 0) {
+        this.log(`El portal no deja avanzar: ${next.errors.join('; ')}`);
         throw new PortalStop(`El portal no deja avanzar: ${next.errors.join('; ')}`, next.index);
       }
       step = next;
@@ -151,12 +167,15 @@ export class AgentOrchestrator {
       const f = p.field;
       switch (p.action) {
         case 'keep':
+          this.log(`${f.label}: valor previo correcto, se conserva`);
           this.record(step, f, { kind: 'prefilled_ok' });
           break;
         case 'skip':
+          this.log(`${f.label}: omitido`);
           this.record(step, f, { kind: 'skipped' });
           break;
         case 'pending':
+          this.log(`${f.label}: pendiente (${p.reason})${p.detail ? ` - ${p.detail}` : ''}`);
           this.record(step, f, {
             kind: 'pending',
             reason: p.reason,
@@ -165,15 +184,24 @@ export class AgentOrchestrator {
           });
           break;
         case 'fill': {
+          this.log(`Escribiendo ${f.label} ← ${p.value} (desde ${p.source})`);
           await adapter.rellenarCampo(f.field_id, p.value);
-          this.check();
+          if (this.stopped) {
+            this.record(step, f, {
+              kind: 'pending',
+              reason: 'no_verificado',
+              detail: 'detenido antes de verificar',
+              candidates: [],
+            });
+            throw new Stopped();
+          }
           const read = await adapter.leerCampo(f.field_id);
           this.check();
           if (normalize(f.type, read) === normalize(f.type, p.value)) {
-            this.log(`Rellenado ${f.label} desde ${p.source}`);
+            this.log(`Verificado ${f.label}: leído "${read}"`);
             this.record(step, f, { kind: 'filled', source: p.source, written: p.value });
           } else {
-            this.log(`No se pudo verificar ${f.label}`);
+            this.log(`No se pudo verificar ${f.label}: escrito "${p.value}", leído "${read}"`);
             this.record(step, f, {
               kind: 'pending',
               reason: 'no_verificado',
