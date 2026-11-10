@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "package_id": "7b1f3c5e-2a4d-4e8b-9c6a-1d2e3f405162",
+  "created_at": "2026-11-10T21:26:10Z",
+  "device_name": "Pixel 8",
+  "files": [
+    {
+      "file_id": "not-a-uuid",
+      "name": "recibo.jpg",
+      "mime": "image/jpeg",
+      "size": 2481930,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "file_id": "3f2e1d0c-9b8a-4766-a554-433221100ffe",
+      "name": "contrato.pdf",
+      "mime": "application/pdf",
+      "size": 120345,
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "file_id": "5a6b7c8d-1e2f-4a3b-9c4d-5e6f7a8b9c0d",
+      "name": "datos.json",
+      "mime": "application/json",
+      "size": 512,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ]
+}
