@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream as fsCreateWriteStream, type WriteStream } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { finished } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
 import { TransferError } from './errors.js';
 import { sniffOk } from './sniff.js';
@@ -45,9 +46,17 @@ type Received = { sha256: string; bytes: number; head: Buffer };
  * Escribe `body` en `partPath` calculando el hash en streaming. Si excede `maxBytes`
  * pausa el origen (sin destruirlo, para que la capa HTTP aún pueda responder) y falla con too_large.
  */
-function receive(body: Readable, partPath: string, maxBytes: number): Promise<Received> {
+type OpenWrite = (path: string, opts: { flags: string }) => WriteStream;
+
+/** Espera a que el WriteStream esté cerrado del todo (fd liberado) antes de seguir. */
+async function closed(out: WriteStream): Promise<void> {
+  if (out.closed) return;
+  await new Promise<void>((r) => out.once('close', () => r()));
+}
+
+function receive(body: Readable, partPath: string, maxBytes: number, open: OpenWrite): Promise<Received> {
   return new Promise((resolve, reject) => {
-    const out = createWriteStream(partPath, { flags: 'wx' });
+    const out = open(partPath, { flags: 'wx' });
     const hash = createHash('sha256');
     const heads: Buffer[] = [];
     let headLen = 0;
@@ -66,7 +75,7 @@ function receive(body: Readable, partPath: string, maxBytes: number): Promise<Re
       settled = true;
       detach();
       out.destroy();
-      reject(err);
+      void closed(out).then(() => reject(err));
     };
     function onData(chunk: Buffer | string) {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
@@ -86,7 +95,15 @@ function receive(body: Readable, partPath: string, maxBytes: number): Promise<Re
       if (settled) return;
       settled = true;
       detach();
-      out.end(() => resolve({ sha256: hash.digest('hex'), bytes, head: Buffer.concat(heads) }));
+      const result = { sha256: hash.digest('hex'), bytes, head: Buffer.concat(heads) };
+      out.end();
+      finished(out).then(
+        () => resolve(result),
+        (err: Error) => {
+          out.destroy();
+          void closed(out).then(() => reject(err));
+        },
+      );
     }
     function onError(err: Error) {
       fail(err);
@@ -114,11 +131,14 @@ async function drain(body: Readable): Promise<void> {
 export class Inbox {
   private readonly now: () => number;
 
+  private readonly openWrite: OpenWrite;
+
   constructor(
     private readonly root: string,
-    opts: { now?: () => number } = {},
+    opts: { now?: () => number; createWriteStream?: OpenWrite } = {},
   ) {
     this.now = opts.now ?? Date.now;
+    this.openWrite = opts.createWriteStream ?? fsCreateWriteStream;
   }
 
   private dir(packageId: string): string {
@@ -183,7 +203,7 @@ export class Inbox {
 
     const partPath = join(filesDir, `${sha256}.${randomUUID()}.part`);
     try {
-      const got = await receive(body, partPath, declared.size);
+      const got = await receive(body, partPath, declared.size, this.openWrite);
       if (got.bytes !== declared.size || got.sha256 !== sha256) {
         throw new TransferError('hash_mismatch', 'El contenido no coincide con el hash declarado');
       }

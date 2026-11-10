@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from '
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createWriteStream, type WriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TransferError } from '../errors.js';
@@ -166,6 +167,31 @@ describe('Inbox', () => {
     expect(pulled).toBeLessThan(1024 * 1024);
     expect(await readdir(join(root, m.package_id, 'files'))).toEqual([]);
     body.destroy();
+  });
+
+  it('no deja .part si el primer bloque ya excede el size (carrera con open del WriteStream)', async () => {
+    const small = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(7)]);
+    const m = manifestOf([entry('a.jpg', 'image/jpeg', small)]);
+    await inbox.announce(m);
+    for (let i = 0; i < 200; i++) {
+      expect(await codeOf(inbox.storeFile(m.package_id, sha(small), Readable.from([Buffer.alloc(1024, 0xff)])))).toBe('too_large');
+      expect(await readdir(join(root, m.package_id, 'files'))).toEqual([]);
+    }
+  });
+
+  it('un fallo al vaciar el último bloque no deja archivo almacenado', async () => {
+    const failing = new Inbox(root, {
+      createWriteStream: (path, opts) => {
+        const ws = createWriteStream(path, opts) as WriteStream & { _final: (cb: (e?: Error) => void) => void };
+        ws._final = (cb) => cb(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }));
+        return ws;
+      },
+    });
+    const m = manifestOf([entry('a.pdf', 'application/pdf', PDF)]);
+    await failing.announce(m);
+    await expect(failing.storeFile(m.package_id, sha(PDF), Readable.from([PDF]))).rejects.toThrow('ENOSPC');
+    expect(await readdir(join(root, m.package_id, 'files'))).toEqual([]);
+    expect((await failing.announce(m)).missing).toEqual([sha(PDF)]);
   });
 
   it('(Foco 5) archivo vacío declarado como image/jpeg: unsupported_type', async () => {
