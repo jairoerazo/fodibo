@@ -19,7 +19,7 @@ const maxFileBytes = 52428800;
 
 // Equivalentes a los formatos de ajv-formats (modo "full").
 final _ipv4 = RegExp(
-    r'^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$');
+    r'^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$');
 final _uuid = RegExp(
     r'^(?:urn:uuid:)?[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$',
     caseSensitive: false);
