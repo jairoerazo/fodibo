@@ -62,3 +62,11 @@ List<String> precheck(LocalFile f) => [
       if (!allowedMimes.contains(f.mime)) 'unsupported_type',
       if (f.size > maxFileBytes) 'too_large',
     ];
+
+/// Límites del paquete, sobre los archivos que se van a enviar:
+/// `too_many_files` (más de [maxPackageFiles]) y `package_too_large` (más de
+/// [maxPackageBytes] en total). El PC rechazaría el anuncio entero.
+List<String> precheckPackage(List<LocalFile> files) => [
+      if (files.length > maxPackageFiles) 'too_many_files',
+      if (files.fold<int>(0, (sum, f) => sum + f.size) > maxPackageBytes) 'package_too_large',
+    ];

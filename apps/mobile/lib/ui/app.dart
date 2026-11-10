@@ -26,6 +26,13 @@ String scanErrorMessage(TransferException e) {
   }
 }
 
+/// Nombre que se anuncia al PC (`device_name`: 1 a 100 caracteres).
+String deviceNameOf(String model) {
+  final name = model.trim();
+  if (name.isEmpty) return 'Android';
+  return String.fromCharCodes(name.runes.take(100));
+}
+
 class FodiboApp extends StatelessWidget {
   const FodiboApp({super.key});
 
@@ -59,9 +66,12 @@ class _HomeState extends State<_Home> {
     try {
       final qr = QrPayload.parse(text);
       final android = await DeviceInfoPlugin().androidInfo;
-      client = await TransferClient.connect(qr, deviceName: android.model);
+      client = await TransferClient.connect(qr, deviceName: deviceNameOf(android.model));
     } on TransferException catch (e) {
       if (mounted) setState(() => _notice = scanErrorMessage(e));
+    } catch (_) {
+      // Fallo inesperado (plataforma, respuesta rara): no dejar el indicador girando.
+      if (mounted) setState(() => _notice = 'No se pudo conectar con el PC.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -72,6 +82,7 @@ class _HomeState extends State<_Home> {
         send: connected.send,
         pickFiles: _pickFiles,
         onSessionClosed: () => Navigator.of(c).pop(true),
+        onRescan: () => Navigator.of(c).pop(false),
       ),
     ));
     connected.close();

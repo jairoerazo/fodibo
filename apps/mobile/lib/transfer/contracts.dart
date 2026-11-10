@@ -17,6 +17,10 @@ const allowedMimes = <String>{
 
 const maxFileBytes = 52428800;
 
+/// Límites del paquete (spec §6): 100 archivos y 500 MB en total.
+const maxPackageFiles = 100;
+const maxPackageBytes = 524288000;
+
 // Equivalentes a los formatos de ajv-formats (modo "full").
 final _ipv4 = RegExp(
     r'^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$');

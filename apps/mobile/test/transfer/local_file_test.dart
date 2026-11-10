@@ -42,4 +42,18 @@ void main() {
     expect(precheck(mk('application/octet-stream', 1)), ['unsupported_type']);
     expect(precheck(mk('application/octet-stream', 52428801)), ['unsupported_type', 'too_large']);
   });
+
+  test('precheckPackage: máximo 100 archivos y 500 MB por envío', () {
+    LocalFile mk(int size) => LocalFile(
+        path: '/x', name: 'x.png', mime: 'image/png', size: size, sha256: '0' * 64);
+    expect(precheckPackage([]), isEmpty);
+    expect(precheckPackage(List.generate(100, (_) => mk(1))), isEmpty);
+    expect(precheckPackage(List.generate(101, (_) => mk(1))), ['too_many_files']);
+    expect(precheckPackage(List.generate(10, (_) => mk(52428800))), isEmpty); // 500 MB justos
+    expect(precheckPackage([...List.generate(10, (_) => mk(52428800)), mk(1)]),
+        ['package_too_large']);
+    expect(precheckPackage(List.generate(11, (_) => mk(49 * 1024 * 1024))), ['package_too_large']);
+    expect(precheckPackage(List.generate(101, (_) => mk(52428800))),
+        ['too_many_files', 'package_too_large']);
+  });
 }
