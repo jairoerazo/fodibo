@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fodibo.local/schemas/receipt.schema.json",
+  "title": "Recibo de importación",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "package_id", "received_at", "files"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "package_id": { "type": "string", "format": "uuid" },
+    "received_at": { "type": "string", "format": "date-time" },
+    "files": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "$ref": "#/$defs/file" } }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_id", "name", "mime", "size", "sha256", "status"],
+      "properties": {
+        "file_id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "mime": { "enum": ["image/jpeg", "image/png", "image/heic", "application/pdf", "application/json"] },
+        "size": { "type": "integer", "minimum": 0, "maximum": 52428800 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "status": { "enum": ["stored"] }
+      }
+    }
+  }
+}

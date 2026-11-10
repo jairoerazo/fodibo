@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fodibo.local/schemas/error.schema.json",
+  "title": "Cuerpo de error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "enum": ["invalid_secret", "unauthorized", "invalid_manifest", "unsupported_type", "too_large", "hash_mismatch", "package_conflict", "incomplete_package", "not_found", "internal"]
+        },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

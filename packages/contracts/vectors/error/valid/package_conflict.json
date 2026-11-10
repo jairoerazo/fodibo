@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "package_conflict",
+    "message": "Mensaje de package_conflict"
+  }
+}
