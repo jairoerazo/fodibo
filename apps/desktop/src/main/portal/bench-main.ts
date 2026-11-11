@@ -1,12 +1,21 @@
-// Banco de pruebas del adaptador CDP contra el portal de prueba (modo `--selftest-adapter`).
-// Abre la vista en una ventana oculta, recorre los 5 pasos con una asignación fija,
-// comprueba el bloqueo del envío y de la red, imprime una línea `SELFTEST:{json}` y sale.
+// Bancos de pruebas con Electron y la ventana oculta:
+// - `--selftest-adapter`: recorre los 5 pasos con una asignación fija (sin modelo), comprueba el
+//   bloqueo del envío y de la red, imprime una línea `SELFTEST:{json}` y sale.
+// - `--bench [--runs=3]`: ejecuta el agente completo con `FODIBO_MODEL` N veces, puntúa contra
+//   `esperado.json`, mide tiempo por paso y memoria, escribe `bench-report.json` y sale.
 import { app, BrowserWindow } from 'electron';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { createReadStream, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { accept, parseExpected, scoreRun, type ExpectedField, type RunScore } from '../../core/agent/bench.js';
+import { loadDeclaration } from '../../core/agent/declaration.js';
 import { formatForField, normalize } from '../../core/agent/format.js';
-import type { Declaration, ObservedField } from '../../core/agent/types.js';
+import { createLlamaClient } from '../../core/agent/model-client.js';
+import { AgentOrchestrator, type AgentState } from '../../core/agent/orchestrator.js';
+import type { Declaration, FieldResult, ObservedField, ObservedStep, PortalAdapter } from '../../core/agent/types.js';
 import { CdpAdapter } from './cdp-adapter.js';
+import { LlamaServer, MSG_NO_MODEL } from './llama.js';
 import { blockedRequests, createPortalSession, portalRoot } from './protocol.js';
 import { PortalView } from './view.js';
 
@@ -265,4 +274,253 @@ export function startAdapterSelftest(): void {
       clearTimeout(guard);
       app.exit(code);
     });
+}
+
+// =============================================================================================
+// Modo `--bench`
+// =============================================================================================
+
+export interface BenchRun {
+  score: RunScore;
+  /** Milisegundos por paso: desde que se observa el paso hasta que el portal avanza. */
+  stepMs: Record<string, number>;
+  /** Pico de memoria residente durante la ejecución, en MB. */
+  rssMb: { llamaServer: number; electron: number };
+  state: AgentState;
+  message?: string;
+  totalMs: number;
+}
+
+export interface BenchReport {
+  model: string;
+  sha256: string;
+  llamaServer: { binary: string; version: string; args: string[] };
+  runs: BenchRun[];
+  accept: { ok: boolean; reasons: string[] };
+}
+
+function sha256File(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const h = createHash('sha256');
+    createReadStream(path)
+      .on('data', (d) => h.update(d))
+      .on('error', reject)
+      .on('end', () => resolve(h.digest('hex')));
+  });
+}
+
+function llamaVersion(binary: string): string {
+  // `llama-server --version` escribe en stderr.
+  const r = spawnSync(binary, ['--version'], { encoding: 'utf8', timeout: 15000 });
+  const lines = `${r.stdout ?? ''}\n${r.stderr ?? ''}`.split('\n').map((l) => l.trim());
+  return lines.find((l) => l.startsWith('version')) ?? 'desconocida';
+}
+
+function rssKbOf(pid: number | undefined): number {
+  if (pid === undefined) return 0;
+  try {
+    return Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }).trim()) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function electronRssKb(): number {
+  // `workingSetSize` en KB, sumado sobre todos los procesos de Electron (principal, GPU, renderers).
+  return app.getAppMetrics().reduce((acc, m) => acc + (m.memory.workingSetSize || 0), 0);
+}
+
+/** Envuelve el adaptador para medir el tiempo de cada paso y registrar las opciones de los `select`. */
+function instrument(adapter: PortalAdapter): { adapter: PortalAdapter; stepMs: Record<string, number>; options: Record<string, string[]> } {
+  const stepMs: Record<string, number> = {};
+  const options: Record<string, string[]> = {};
+  let current: { index: number; t0: number } | undefined;
+  const wrapped: PortalAdapter = {
+    async observarPaso(): Promise<ObservedStep> {
+      const step = await adapter.observarPaso();
+      if (!step.isSummary && current?.index !== step.index) current = { index: step.index, t0: Date.now() };
+      for (const f of step.fields) if (f.options) options[`${step.index}/${f.label}`] = f.options;
+      return step;
+    },
+    rellenarCampo: (id, v) => adapter.rellenarCampo(id, v),
+    leerCampo: (id) => adapter.leerCampo(id),
+    async avanzarPaso(): Promise<void> {
+      await adapter.avanzarPaso();
+      if (current) stepMs[String(current.index)] = Date.now() - current.t0;
+    },
+  };
+  return { adapter: wrapped, stepMs, options };
+}
+
+const out = (line: string): void => {
+  process.stdout.write(`[bench] ${line}\n`);
+};
+
+function summarize(report: BenchReport): string {
+  const lines = [`Modelo: ${report.model} (sha256 ${report.sha256.slice(0, 16)}…)`, `llama-server: ${report.llamaServer.version}`];
+  report.runs.forEach((r, i) => {
+    const s = r.score;
+    const steps = Object.entries(r.stepMs)
+      .map(([k, v]) => `p${k} ${(v / 1000).toFixed(1)} s`)
+      .join(', ');
+    lines.push(
+      `Ejecución ${i + 1}: ${s.correct}/${s.withData} correctos, ${s.wrong} equivocados, ${s.invented} inventados, ` +
+        `pendientes ${s.pendingOk} ok / ${s.pendingMissed} fallidos, ${s.blockedSubmits} envíos bloqueados, estado ${r.state}` +
+        `${r.message ? ` (${r.message})` : ''}`,
+    );
+    lines.push(`  tiempo: ${(r.totalMs / 1000).toFixed(1)} s [${steps}]; RSS pico: llama-server ${r.rssMb.llamaServer} MB, Electron ${r.rssMb.electron} MB`);
+    for (const f of s.failures) lines.push(`  fallo ${f.key}: esperado ${JSON.stringify(f.expected)}, obtenido ${JSON.stringify(f.got)}`);
+  });
+  lines.push(report.accept.ok ? 'ACEPTADO' : `NO ACEPTADO:\n  ${report.accept.reasons.join('\n  ')}`);
+  return lines.join('\n');
+}
+
+export async function runBench(argv: string[], env: NodeJS.ProcessEnv, llama: { current?: LlamaServer }): Promise<number> {
+  const runsArg = argv.find((a) => a.startsWith('--runs='));
+  const runs = runsArg ? Number(runsArg.slice('--runs='.length)) : 3;
+  if (!Number.isInteger(runs) || runs < 1) throw new Error(`--runs no válido: ${runsArg ?? ''}`);
+  const modelPath = env['FODIBO_MODEL'];
+  if (!modelPath) throw new Error(MSG_NO_MODEL);
+  const binary = env['FODIBO_LLAMA_SERVER'] || 'llama-server';
+  const threads = env['FODIBO_THREADS'] || '4';
+  const extraArgs = ['-t', threads];
+
+  const root = portalRoot();
+  const expectedMap = parseExpected(JSON.parse(readFileSync(join(root, 'esperado.json'), 'utf8')));
+  const expected: Record<string, ExpectedField> = {};
+  for (const [k, v] of expectedMap) expected[k] = v.expected;
+  const decl = loadDeclaration(JSON.parse(readFileSync(join(root, 'declaracion.json'), 'utf8')));
+
+  out(`Calculando SHA-256 de ${modelPath}`);
+  const sha256 = await sha256File(modelPath);
+  const version = llamaVersion(binary);
+  out(`llama-server ${version}; arrancando el modelo (hilos: ${threads})`);
+  const server = new LlamaServer({ binary, modelPath, extraArgs, healthTimeoutMs: 300_000 });
+  llama.current = server;
+  const t0 = Date.now();
+  const baseUrl = await server.start();
+  out(`Modelo listo en ${((Date.now() - t0) / 1000).toFixed(1)} s (${baseUrl})`);
+
+  const ses = createPortalSession(root);
+  const win = new BrowserWindow({
+    show: false,
+    width: 1000,
+    height: 800,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+  });
+  const view = new PortalView(win, ses);
+  view.setBounds({ x: 0, y: 0, width: 1000, height: 800 });
+  const results: BenchRun[] = [];
+  let active: AgentOrchestrator | undefined;
+  view.onSubmitBlocked(() => active?.stop());
+
+  try {
+    for (let i = 1; i <= runs; i++) {
+      out(`Ejecución ${i}/${runs}: recargando el portal`);
+      await view.load();
+      const cdp = new CdpAdapter(view.webContents);
+      const inst = instrument(cdp);
+      const baseline = view.blockedSubmits;
+      let state: AgentState = 'inactivo';
+      let message: string | undefined;
+      let peakLlama = 0;
+      let peakElectron = 0;
+      const sample = (): void => {
+        peakLlama = Math.max(peakLlama, rssKbOf(server.pid));
+        peakElectron = Math.max(peakElectron, electronRssKb());
+      };
+      sample();
+      const sampler = setInterval(sample, 1000);
+      const started = Date.now();
+      let fieldResults: FieldResult[] = [];
+      try {
+        view.setAgentActive(true);
+        await cdp.attach();
+        const orchestrator = new AgentOrchestrator({
+          adapter: inst.adapter,
+          model: createLlamaClient(baseUrl),
+          declaration: decl,
+          getBlockedSubmits: () => view.blockedSubmits - baseline,
+          onEvent: (e) => {
+            if (e.type === 'log') out(`  ${e.text}`);
+            else if (e.type === 'state' && e.state !== 'rellenando') {
+              state = e.state;
+              message = e.message;
+            }
+          },
+        });
+        active = orchestrator;
+        fieldResults = await orchestrator.run();
+      } catch (e) {
+        state = 'error';
+        message = e instanceof Error ? e.message : String(e);
+      } finally {
+        active = undefined;
+        clearInterval(sampler);
+        sample();
+        cdp.detach();
+        view.setAgentActive(false);
+      }
+      const score = scoreRun(fieldResults, expected, decl, view.blockedSubmits - baseline, inst.options);
+      const run: BenchRun = {
+        score,
+        stepMs: inst.stepMs,
+        rssMb: { llamaServer: Math.round(peakLlama / 1024), electron: Math.round(peakElectron / 1024) },
+        state,
+        totalMs: Date.now() - started,
+        ...(message !== undefined ? { message } : {}),
+      };
+      results.push(run);
+      out(`Ejecución ${i}: ${score.correct}/${score.withData} correctos, ${score.wrong} equivocados, ${score.invented} inventados, estado ${state}`);
+    }
+  } finally {
+    view.destroy();
+    win.destroy();
+  }
+
+  const report: BenchReport = {
+    model: basename(modelPath),
+    sha256,
+    llamaServer: { binary, version, args: extraArgs },
+    runs: results,
+    accept: accept(results.map((r) => r.score)),
+  };
+  const reportPath = join(app.getAppPath(), 'bench-report.json');
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  process.stdout.write(`\n${summarize(report)}\nInforme: ${reportPath}\n`);
+  return report.accept.ok ? 0 : 1;
+}
+
+export function startBench(): void {
+  const llama: { current?: LlamaServer } = {};
+  let exiting = false;
+  const finish = async (code: number): Promise<void> => {
+    if (exiting) return;
+    exiting = true;
+    clearTimeout(guard);
+    try {
+      await llama.current?.stop();
+    } catch {
+      // mejor esfuerzo; el proceso se mata igualmente al salir
+    }
+    out(`Saliendo con código ${code}`);
+    app.exit(code);
+  };
+  const minutes = Number(process.env['FODIBO_BENCH_TIMEOUT_MIN'] || '90');
+  const guard = setTimeout(() => {
+    out(`Tiempo global agotado (${minutes} min)`);
+    void finish(2);
+  }, minutes * 60_000);
+  for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => void finish(130));
+  // Sin este oyente, Electron sale con código 0 al destruir la ventana oculta, antes de `finish`.
+  app.on('window-all-closed', () => {});
+  app.dock?.hide();
+  void app
+    .whenReady()
+    .then(() => runBench(process.argv, process.env, llama))
+    .catch((e: unknown) => {
+      out(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    })
+    .then((code) => finish(code));
 }

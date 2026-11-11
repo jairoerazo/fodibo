@@ -11,6 +11,8 @@ export interface LlamaServerOptions {
   modelPath: string;
   /** Argumentos antepuestos a los propios (permite lanzar un script con `process.execPath` en las pruebas). */
   args?: string[];
+  /** Argumentos añadidos al final (p. ej. `['-t', '4']`). Por defecto, ninguno. */
+  extraArgs?: string[];
   spawn?: typeof nodeSpawn;
   healthTimeoutMs?: number;
   killTimeoutMs?: number;
@@ -47,6 +49,12 @@ export class LlamaServer {
 
   constructor(private readonly opts: LlamaServerOptions) {}
 
+  /** PID del proceso en marcha (para medir su memoria), o `undefined`. */
+  get pid(): number | undefined {
+    const c = this.child;
+    return c && c.exitCode === null && c.signalCode === null ? c.pid : undefined;
+  }
+
   start(): Promise<string> {
     if (this.baseUrl && this.child && this.child.exitCode === null && this.child.signalCode === null) {
       return Promise.resolve(this.baseUrl);
@@ -66,7 +74,7 @@ export class LlamaServer {
     if (gen !== this.gen) throw new Error('Arranque del modelo cancelado.');
     const baseUrl = `http://127.0.0.1:${port}`;
     const spawn = this.opts.spawn ?? nodeSpawn;
-    const args = [...(this.opts.args ?? []), '-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-c', '8192', '--temp', '0'];
+    const args = [...(this.opts.args ?? []), '-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-c', '8192', '--temp', '0', ...(this.opts.extraArgs ?? [])];
 
     let child: ChildProcess;
     try {

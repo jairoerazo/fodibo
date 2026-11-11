@@ -67,6 +67,7 @@ DerivedData/
 *.key
 
 # Registros y temporales
+bench-report*.json
 .dev-data/
 *.log
 tmp/

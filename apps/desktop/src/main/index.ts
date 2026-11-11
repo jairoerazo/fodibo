@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { loadDeclaration } from '../core/agent/index.js';
 import { TransferService } from '../core/transfer/index.js';
 import { registerIpc } from './ipc.js';
-import { startAdapterSelftest } from './portal/bench-main.js';
+import { startAdapterSelftest, startBench } from './portal/bench-main.js';
 import { AGENT_CHANNELS } from '../shared/agent-ipc.js';
 import { AgentController, createLlamaFromEnv, errMsg, registerAgentIpc, type LlamaLike } from './portal/agent-ipc.js';
 import { CdpAdapter } from './portal/cdp-adapter.js';
@@ -16,6 +16,7 @@ registerPortalScheme();
 
 let win: BrowserWindow | undefined;
 const selftest = process.argv.includes('--selftest-adapter');
+const bench = process.argv.includes('--bench');
 const service = new TransferService({ dataDir: app.getPath('userData'), log: (m) => console.log(`[fodibo] ${m}`) });
 
 let llama: LlamaLike | undefined;
@@ -99,4 +100,5 @@ function startApp(): void {
 }
 
 if (selftest) startAdapterSelftest();
+else if (bench) startBench();
 else startApp();

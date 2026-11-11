@@ -69,6 +69,18 @@ describe('LlamaServer', () => {
     expect(await server.start()).toBe(url); // reutilizado
   });
 
+  it('extraArgs se añaden al final y pid expone el proceso', async () => {
+    server = new LlamaServer({ binary: process.execPath, args: [okScript], modelPath: model, extraArgs: ['-t', '4'] });
+    expect(server.pid).toBeUndefined();
+    const url = await server.start();
+    const port = url.split(':')[2];
+    const info = JSON.parse((await import('node:fs')).readFileSync(pidFile, 'utf8')) as { pid: number; args: string[] };
+    expect(info.args).toEqual(['-m', model, '--host', '127.0.0.1', '--port', port, '-c', '8192', '--temp', '0', '-t', '4']);
+    expect(server.pid).toBe(info.pid);
+    await server.stop();
+    expect(server.pid).toBeUndefined();
+  });
+
   it('el proceso muere antes de estar sano: error con su stderr', async () => {
     server = new LlamaServer({ binary: process.execPath, args: [dieScript], modelPath: model });
     await expect(server.start()).rejects.toThrow(/fallo cargando modelo/);
