@@ -70,6 +70,14 @@ describe('AgentOrchestrator', () => {
     expect(events.some((e) => e.type === 'log')).toBe(true);
   });
 
+  it('el estado «rellenando» lleva el paso y el total observados', async () => {
+    const { adapter } = fakeAdapter();
+    const { events, onEvent } = collect();
+    await new AgentOrchestrator({ adapter, model: goodModel(), declaration: decl, onEvent }).run();
+    const filling = events.filter((e) => e.type === 'state' && e.state === 'rellenando');
+    expect(filling).toEqual([1, 2, 3].map((step) => ({ type: 'state', state: 'rellenando', step, total: 4 })));
+  });
+
   it('respuesta inválida y luego válida: un reintento', async () => {
     let n = 0;
     const good = goodModel();

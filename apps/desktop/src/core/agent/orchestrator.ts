@@ -8,7 +8,7 @@ export type { ModelClient } from './model-client.js';
 
 export type AgentState = 'inactivo' | 'rellenando' | 'entregado' | 'detenido' | 'error';
 export type AgentEvent =
-  | { type: 'state'; state: AgentState; step?: number; message?: string }
+  | { type: 'state'; state: AgentState; step?: number; total?: number; message?: string }
   | { type: 'log'; at: string; text: string }
   | { type: 'field'; result: FieldResult }
   | { type: 'finished'; results: FieldResult[]; pending: FieldResult[]; blockedSubmits: number };
@@ -117,7 +117,7 @@ export class AgentOrchestrator {
         this.log(`Se superó el máximo de ${maxSteps} pasos sin llegar al resumen`);
         throw new Error('el portal no llega al resumen');
       }
-      this.emit({ type: 'state', state: 'rellenando', step: step.index });
+      this.emit({ type: 'state', state: 'rellenando', step: step.index, total: step.total });
       this.log(`Paso ${step.index}/${step.total}: ${step.title}`);
       const plan = await this.plan(step);
       if (plan) await this.apply(step, plan);
