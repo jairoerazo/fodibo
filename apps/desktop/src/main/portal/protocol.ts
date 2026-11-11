@@ -1,6 +1,7 @@
 // Esquema `fodibo-portal:` y sesión aislada del portal de prueba.
 // La sesión es temporal (sin `persist:`), sirve solo archivos de `rootDir`, cancela cualquier
-// petición de otro esquema y deniega todos los permisos.
+// petición de otro esquema, enruta la red a un proxy inexistente (defensa en profundidad) y
+// deniega todos los permisos.
 import { protocol, session as electronSession, type Session } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
@@ -77,10 +78,23 @@ export async function resolvePortalFile(root: string, rawUrl: string): Promise<s
   }
 }
 
+/**
+ * Proxy que no existe (`.invalid` nunca resuelve, RFC 6761) y sin excepciones implícitas para
+ * loopback: si algo escapara a `onBeforeRequest`, no tendría salida. No afecta al esquema propio.
+ */
+export const PORTAL_DENY_PROXY = { mode: 'fixed_servers', proxyRules: 'proxy.invalid:9', proxyBypassRules: '<-loopback>' } as const;
+
+const ready = new WeakMap<Session, Promise<void>>();
+/** Resuelve cuando la sesión está endurecida; la vista lo espera antes de la primera carga. */
+export function portalSessionReady(ses: Session): Promise<void> {
+  return ready.get(ses) ?? Promise.resolve();
+}
+
 export function createPortalSession(rootDir: string): Session {
   const ses = electronSession.fromPartition(`portal-${randomUUID()}`, { cache: false });
   const log: string[] = [];
   blocked.set(ses, log);
+  ready.set(ses, ses.setProxy({ ...PORTAL_DENY_PROXY }));
 
   ses.protocol.handle(PORTAL_SCHEME, async (req) => {
     if (req.method !== 'GET') return new Response(null, { status: 405 });

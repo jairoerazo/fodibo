@@ -16,7 +16,7 @@ import { AgentOrchestrator, type AgentState } from '../../core/agent/orchestrato
 import type { Declaration, FieldResult, ObservedField, ObservedStep, PortalAdapter } from '../../core/agent/types.js';
 import { CdpAdapter } from './cdp-adapter.js';
 import { LlamaServer, MSG_NO_MODEL } from './llama.js';
-import { blockedRequests, createPortalSession, portalRoot } from './protocol.js';
+import { blockedRequests, createPortalSession, PORTAL_DENY_PROXY, portalRoot } from './protocol.js';
 import { PortalView } from './view.js';
 
 interface Check {
@@ -92,6 +92,11 @@ export async function runAdapterSelftest(): Promise<number> {
 
   try {
     await view.load();
+    check('carga del portal con la red endurecida', wc.getURL().endsWith('/index.html'), wc.getURL());
+    const policy = wc.getWebRTCIPHandlingPolicy();
+    check('red: WebRTC sin UDP fuera del proxy', policy === 'disable_non_proxied_udp', policy);
+    const proxy = await ses.resolveProxy('https://example.com/');
+    check('red: proxy de denegación en la sesión', proxy.includes(PORTAL_DENY_PROXY.proxyRules), proxy);
     view.setAgentActive(true);
     await adapter.attach();
     check('attach', adapter.attached);
