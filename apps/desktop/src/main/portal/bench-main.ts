@@ -25,12 +25,6 @@ interface Check {
   detail?: string;
 }
 
-interface Expected {
-  source?: string;
-  pending?: boolean;
-  empty?: boolean;
-}
-
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 async function waitFor(pred: () => boolean, ms: number): Promise<boolean> {
@@ -51,23 +45,22 @@ async function throws(fn: () => Promise<unknown>): Promise<string | undefined> {
   }
 }
 
-/** Asignación fija `paso/etiqueta` → clave de la declaración (la etiqueta puede contener «/»). */
-function loadExpected(root: string): Map<string, Expected> {
-  const raw = JSON.parse(readFileSync(join(root, 'esperado.json'), 'utf8')) as Record<string, Expected>;
-  const out = new Map<string, Expected>();
-  for (const [k, v] of Object.entries(raw)) {
-    const i = k.indexOf('/');
-    out.set(`${k.slice(0, i)}/${k.slice(i + 1)}`, v);
-  }
+/** Asignación fija `paso/etiqueta` → clave de la declaración, leída de `esperado.json`. */
+function loadExpected(root: string): Map<string, ExpectedField> {
+  const out = new Map<string, ExpectedField>();
+  for (const [k, v] of parseExpected(JSON.parse(readFileSync(join(root, 'esperado.json'), 'utf8')))) out.set(k, v.expected);
   return out;
 }
 
-function valueFor(decl: Declaration, exp: Expected, field: ObservedField): string | undefined {
-  if (!exp.source) return undefined;
+function valueFor(decl: Declaration, exp: ExpectedField, field: ObservedField): string | undefined {
+  if (!('source' in exp)) return undefined;
   const entry = decl[exp.source];
   if (!entry) throw new Error(`Clave inexistente en la declaración: ${exp.source}`);
-  // El select del portal está en alemán; la declaración usa el valor canónico en español.
-  if (field.type === 'select' && entry.valor === 'casado') return 'verheiratet';
+  // El select del portal está en alemán; esperado.json fija la opción exacta.
+  if (field.type === 'select') {
+    if (exp.option === undefined) throw new Error(`esperado.json no fija la opción de «${field.label}»`);
+    return exp.option;
+  }
   return formatForField(entry, field);
 }
 

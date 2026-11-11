@@ -2,7 +2,11 @@
 import { formatForField, normalize } from './format.js';
 import type { DeclType, Declaration, FieldOutcome, FieldResult, FieldType, ObservedField } from './types.js';
 
-export type ExpectedField = { source: string } | { pending: true } | { empty: true };
+/**
+ * `option`: para un `select`, el valor exacto que debe escribirse; si se da, rellenar con la fuente
+ * correcta pero otra opción cuenta como equivocado.
+ */
+export type ExpectedField = { source: string; option?: string } | { pending: true } | { empty: true };
 
 export interface RunScore {
   /** Campos esperados con dato (`source`). */
@@ -33,7 +37,11 @@ export function parseExpected(raw: unknown): Map<string, { step: number; label: 
     if (i < 1 || !Number.isInteger(step) || step < 1 || label === '') throw new Error(`Clave no válida en esperado.json: ${k}`);
     const e = v as Record<string, unknown> | null;
     let expected: ExpectedField;
-    if (e && typeof e['source'] === 'string') expected = { source: e['source'] };
+    if (e && typeof e['source'] === 'string') {
+      const option = e['option'];
+      if (option !== undefined && (typeof option !== 'string' || option === '')) throw new Error(`Opción no válida en esperado.json: ${k}`);
+      expected = option === undefined ? { source: e['source'] } : { source: e['source'], option };
+    }
     else if (e && e['pending'] === true) expected = { pending: true };
     else if (e && e['empty'] === true) expected = { empty: true };
     else throw new Error(`Valor no válido en esperado.json: ${k}`);
@@ -87,7 +95,9 @@ export function scoreRun(
     let ok: boolean;
     if ('source' in exp) {
       s.withData++;
-      ok = (got.kind === 'filled' && got.source === exp.source) || got.kind === 'prefilled_ok';
+      ok =
+        (got.kind === 'filled' && got.source === exp.source && (exp.option === undefined || got.written === exp.option)) ||
+        got.kind === 'prefilled_ok';
       if (ok) s.correct++;
       else if (got.kind === 'filled') s.wrong++;
     } else if ('pending' in exp) {

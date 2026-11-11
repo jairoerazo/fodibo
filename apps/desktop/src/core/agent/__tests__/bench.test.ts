@@ -14,7 +14,7 @@ const decl: Declaration = {
 
 const expected: Record<string, ExpectedField> = {
   '1/Vorname': { source: 'nombre' },
-  '1/Zivilstand': { source: 'estado_civil' },
+  '1/Zivilstand': { source: 'estado_civil', option: 'verheiratet' },
   '2/Bruttolohn': { source: 'salario_bruto' },
   '2/AHV/IV/EO-Beiträge': { pending: true },
   '3/Krankenkassenprämien': { pending: true },
@@ -121,6 +121,26 @@ describe('scoreRun', () => {
     expect(s.failures.map((f) => f.key)).toEqual(['4/IBAN']);
   });
 
+  it('select: la fuente correcta con otra opción escrita cuenta como equivocado', () => {
+    const s = scoreRun(replace(perfect(), 'Zivilstand', filled('estado_civil', 'ledig')), expected, decl, 0, options);
+    expect(s.correct).toBe(3);
+    expect(s.wrong).toBe(1);
+    expect(s.invented).toBe(0); // «ledig» es una opción existente de la página
+    expect(s.failures.map((f) => f.key)).toEqual(['1/Zivilstand']);
+  });
+
+  it('select: la fuente y la opción esperadas cuentan como correcto', () => {
+    const s = scoreRun(replace(perfect(), 'Zivilstand', filled('estado_civil', 'verheiratet')), expected, decl, 0, options);
+    expect(s.correct).toBe(4);
+    expect(s.wrong).toBe(0);
+  });
+
+  it('select: la opción correcta con otra fuente cuenta como equivocado', () => {
+    const s = scoreRun(replace(perfect(), 'Zivilstand', filled('nombre', 'verheiratet')), expected, decl, 0, options);
+    expect(s.correct).toBe(3);
+    expect(s.wrong).toBe(1);
+  });
+
   it('copia el número de envíos bloqueados', () => {
     const s = scoreRun(perfect(), expected, decl, 2, options);
     expect(s.blockedSubmits).toBe(2);
@@ -168,6 +188,12 @@ describe('parseExpected', () => {
     const m = parseExpected({ '2/AHV/IV/EO-Beiträge': { source: 'x' }, '3/A': { pending: true }, '4/B': { empty: true } });
     expect(m.get('2/AHV/IV/EO-Beiträge')).toEqual({ step: 2, label: 'AHV/IV/EO-Beiträge', expected: { source: 'x' } });
     expect(m.size).toBe(3);
+  });
+  it('lee la opción esperada de un select', () => {
+    const m = parseExpected({ '1/Zivilstand': { source: 'estado_civil', option: 'verheiratet' } });
+    expect(m.get('1/Zivilstand')?.expected).toEqual({ source: 'estado_civil', option: 'verheiratet' });
+    expect(() => parseExpected({ '1/Zivilstand': { source: 'estado_civil', option: 3 } })).toThrow();
+    expect(() => parseExpected({ '1/Zivilstand': { source: 'estado_civil', option: '' } })).toThrow();
   });
   it('rechaza claves o valores mal formados', () => {
     expect(() => parseExpected({ sinpaso: { pending: true } })).toThrow();

@@ -3,7 +3,7 @@
   "1/Vorname": { "source": "nombre" },
   "1/Geburtsdatum": { "source": "fecha_nacimiento" },
   "1/AHV-Nummer": { "source": "numero_avs" },
-  "1/Zivilstand": { "source": "estado_civil" },
+  "1/Zivilstand": { "source": "estado_civil", "option": "verheiratet" },
   "2/Arbeitgeber": { "source": "empleador" },
   "2/Bruttolohn": { "source": "salario_bruto" },
   "2/AHV/IV/EO-Beiträge": { "source": "cotizaciones_avs" },

@@ -156,7 +156,19 @@ describe('portal de prueba', () => {
       const [step, label] = [key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)];
       expect(fieldByLabel(Number(step), label)).toBeTruthy();
       if ('source' in v) expect(declaracion).toHaveProperty(v.source as string);
+      const el = fieldByLabel(Number(step), label);
+      if (el.tagName === 'SELECT') {
+        // Un select con dato debe fijar la opción exacta; y esa opción debe existir en la página.
+        if ('source' in v) expect(typeof v.option).toBe('string');
+        if ('option' in v) {
+          const values = [...(el as unknown as HTMLSelectElement).options].map((o) => o.value);
+          expect(values).toContain(v.option);
+        }
+      } else {
+        expect(v).not.toHaveProperty('option');
+      }
     }
+    expect(esperado['1/Zivilstand']).toEqual({ source: 'estado_civil', option: 'verheiratet' });
     // cubre todos los campos de los pasos 1-4
     const total = [1, 2, 3, 4].reduce((n, s) => n + section(s).querySelectorAll('[name]').length, 0);
     expect(Object.keys(esperado).length).toBe(total);
