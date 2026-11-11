@@ -24,6 +24,7 @@ const agentApi: AgentApi = {
   start: () => ipcRenderer.invoke(AGENT_CHANNELS.start),
   stop: () => ipcRenderer.invoke(AGENT_CHANNELS.stop),
   setBounds: (r) => ipcRenderer.send(AGENT_CHANNELS.bounds, r),
+  setVisible: (v) => ipcRenderer.send(AGENT_CHANNELS.visible, v),
   onEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, event: Parameters<typeof cb>[0]) => cb(event);
     ipcRenderer.on(AGENT_CHANNELS.event, listener);

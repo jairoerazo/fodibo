@@ -2,13 +2,23 @@ import { describe, expect, it } from 'vitest';
 import type { AgentUiEvent } from '../../../shared/agent-ipc.js';
 import { AgentController, createLlamaFromEnv, registerAgentIpc, type AdapterLike, type ViewLike } from '../agent-ipc.js';
 
-function setup(opts: { blocked?: () => number; llamaStart?: () => Promise<string>; modelComplete?: () => Promise<unknown>; hang?: boolean } = {}) {
+function setup(
+  opts: {
+    blocked?: () => number;
+    llamaStart?: () => Promise<string>;
+    modelComplete?: () => Promise<unknown>;
+    hang?: boolean;
+    attach?: () => Promise<void>;
+    loadDeclaration?: () => Record<string, never>;
+  } = {},
+) {
   const calls: string[] = [];
   const events: AgentUiEvent[] = [];
   let blockedCb: (() => void) | undefined;
   const view: ViewLike = {
     load: async () => void calls.push('load'),
     setBounds: (r) => void calls.push(`bounds:${r.width}`),
+    setVisible: (v) => void calls.push(`visible:${v}`),
     setAgentActive: (a) => void calls.push(`active:${a}`),
     get blockedSubmits() {
       return opts.blocked?.() ?? 0;
@@ -17,9 +27,13 @@ function setup(opts: { blocked?: () => number; llamaStart?: () => Promise<string
     destroy: () => void calls.push('destroy'),
   };
   const adapter: AdapterLike = {
-    attach: async () => void calls.push('attach'),
+    attach: async () => {
+      calls.push('attach');
+      await opts.attach?.();
+    },
     detach: () => void calls.push('detach'),
     observarPaso: async () => {
+      calls.push('observe');
       if (opts.hang) await new Promise((r) => setTimeout(r, 200));
       return { index: 1, total: 1, title: 't', isSummary: true, fields: [], errors: [] };
     },
@@ -39,7 +53,7 @@ function setup(opts: { blocked?: () => number; llamaStart?: () => Promise<string
     createView: () => ({ view, adapter }),
     getLlama: () => llama,
     createModel: () => ({ complete: opts.modelComplete ?? (async () => ({})) }),
-    loadDeclaration: () => ({}),
+    loadDeclaration: opts.loadDeclaration ?? (() => ({})),
     emit: (e) => {
       events.push(e);
       if (e.type === 'finished' || e.type === 'state') calls.push(`ev:${e.type}`);
@@ -125,7 +139,7 @@ describe('AgentController', () => {
   it('registerAgentIpc enruta y limpia', async () => {
     const handlers = new Map<string, (...a: unknown[]) => unknown>();
     const removed: string[] = [];
-    const { c } = setup();
+    const { c, calls } = setup();
     const off = registerAgentIpc(
       {
         handle: (ch, l) => void handlers.set(ch, l),
@@ -137,9 +151,12 @@ describe('AgentController', () => {
     );
     await handlers.get('agent:open')!({});
     handlers.get('agent:bounds')!({}, { x: 'mal' }); // no lanza
+    handlers.get('agent:visible')!({}, 'sí'); // no lanza
+    handlers.get('agent:visible')!({}, true);
+    expect(calls.filter((x) => x.startsWith('visible:')).at(-1)).toBe('visible:true');
     await handlers.get('agent:stop')!({});
     off();
-    expect(removed).toHaveLength(5);
+    expect(removed).toHaveLength(6);
   });
 
   it('stop durante el arranque del modelo termina la ejecución como detenida', async () => {
@@ -182,5 +199,66 @@ describe('AgentController', () => {
     await second;
     const fin = events.filter((e) => e.type === 'finished') as { blockedSubmits: number }[];
     expect(fin.map((f) => f.blockedSubmits)).toEqual([0, 2]);
+  });
+
+  it('visibilidad: valida el booleano, oculta por defecto y se aplica al abrir', async () => {
+    const { c, calls } = setup();
+    expect(() => c.setVisible('true')).toThrow();
+    expect(() => c.setVisible(1)).toThrow();
+    c.setVisible(true);
+    await c.openPortal();
+    expect(calls).toContain('visible:true');
+    c.setVisible(false);
+    expect(calls.at(-1)).toBe('visible:false');
+    // Ocultar no toca los límites: la vista conserva su tamaño real.
+    expect(calls.filter((x) => x === 'bounds:0')).toHaveLength(1); // solo el inicial al crear la vista
+  });
+
+  it('la vista empieza oculta si el renderer aún no dijo que es visible', async () => {
+    const { c, calls } = setup();
+    await c.openPortal();
+    expect(calls).toContain('visible:false');
+    expect(calls).not.toContain('visible:true');
+  });
+
+  it('cada ejecución recarga el portal antes de adjuntar el depurador', async () => {
+    const { c, calls } = setup();
+    await c.openPortal();
+    await c.start();
+    await c.start();
+    const loads = calls.reduce<number[]>((a, x, i) => (x === 'load' ? [...a, i] : a), []);
+    const attaches = calls.reduce<number[]>((a, x, i) => (x === 'attach' ? [...a, i] : a), []);
+    expect(loads).toHaveLength(3); // abrir + 2 ejecuciones
+    expect(loads[1]!).toBeLessThan(attaches[0]!);
+    expect(loads[2]!).toBeGreaterThan(attaches[0]!);
+    expect(loads[2]!).toBeLessThan(attaches[1]!);
+    expect(calls.indexOf('load', loads[1]!)).toBeLessThan(calls.indexOf('active:true'));
+  });
+
+  it('envío bloqueado durante attach: la ejecución termina detenida sin observar', async () => {
+    let trigger!: () => void;
+    // La página intenta enviar mientras attach() aún no ha terminado (todavía no hay orquestador).
+    const s = setup({ attach: async () => trigger() });
+    trigger = () => s.trigger();
+    await s.c.openPortal();
+    await s.c.start();
+    expect(s.events).toContainEqual(expect.objectContaining({ type: 'log', text: 'Intento de envío bloqueado' }));
+    expect(s.events).toContainEqual({ type: 'state', state: 'detenido' });
+    expect(s.events.some((e) => e.type === 'state' && e.state === 'entregado')).toBe(false);
+    expect(s.calls).not.toContain('observe');
+  });
+
+  it('un fallo al leer la declaración es un error del agente, no del modelo', async () => {
+    const { c, events, calls } = setup({
+      loadDeclaration: () => {
+        throw new Error('No se pudo leer la declaración: JSON roto');
+      },
+    });
+    await c.openPortal();
+    await expect(c.start()).rejects.toThrow('No se pudo leer la declaración: JSON roto');
+    expect(events).toContainEqual({ type: 'state', state: 'error', message: 'No se pudo leer la declaración: JSON roto' });
+    expect(events.some((e) => e.type === 'model')).toBe(false);
+    expect(calls).not.toContain('attach');
+    expect(c.isRunning).toBe(false);
   });
 });

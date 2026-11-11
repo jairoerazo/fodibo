@@ -88,6 +88,15 @@ export class PortalView {
     this.view.setBounds(r);
   }
 
+  /** Oculta sin encoger: la página conserva su tamaño y el agente puede seguir trabajando. */
+  setVisible(visible: boolean): void {
+    this.view.setVisible(visible);
+  }
+
+  get visible(): boolean {
+    return this.view.getVisible();
+  }
+
   setAgentActive(active: boolean): void {
     this.agentActive = active;
   }

@@ -83,6 +83,10 @@ export async function runAdapterSelftest(): Promise<number> {
   });
   const view = new PortalView(win, ses);
   view.setBounds({ x: 0, y: 0, width: 1000, height: 800 });
+  // Ventana mostrada pero transparente y sin foco: como en la app, la vista del portal vive en una
+  // ventana visible, y ocultar la vista (cambio de pestaña) debe dejar trabajar al agente.
+  win.setOpacity(0);
+  win.showInactive();
   const wc = view.webContents;
   const adapter = new CdpAdapter(wc);
   let submitBlockedEvents = 0;
@@ -110,6 +114,11 @@ export async function runAdapterSelftest(): Promise<number> {
     const errOldRead = await throws(() => adapter.leerCampo(oldId));
     check('recarga: field_id antiguo lanza (leer)', errOldRead !== undefined, errOldRead);
 
+    // Pestaña cambiada durante la ejecución: la vista se oculta sin encogerse y el agente sigue.
+    view.setVisible(false);
+    await sleep(500);
+    const hiddenState = (await wc.executeJavaScript('[document.visibilityState, innerWidth, innerHeight].join(" ")')) as string;
+    check('vista oculta: conserva su tamaño', !view.visible && !hiddenState.endsWith(' 0 0'), hiddenState);
     for (let n = 1; n <= 4; n++) {
       const step = await adapter.observarPaso();
       check(`paso ${n}: observado`, step.index === n && step.total === 5 && !step.isSummary, `${step.index}/${step.total} ${step.title}`);
@@ -160,6 +169,10 @@ export async function runAdapterSelftest(): Promise<number> {
       const next = await adapter.observarPaso();
       check(`paso ${n}: avanza`, next.index === n + 1, `${next.index} errores: ${next.errors.join(' | ')}`);
     }
+
+    check('vista oculta: rellenar y avanzar los 4 pasos funciona', !view.visible, (await wc.executeJavaScript('document.visibilityState')) as string);
+    view.setVisible(true);
+    check('vista visible de nuevo', view.visible);
 
     const summary = await adapter.observarPaso();
     check('resumen: isSummary', summary.isSummary && summary.index === 5);

@@ -6,6 +6,7 @@ export const AGENT_CHANNELS = {
   start: 'agent:start',
   stop: 'agent:stop',
   bounds: 'agent:bounds',
+  visible: 'agent:visible',
   event: 'agent:event',
 } as const;
 
@@ -26,6 +27,8 @@ export interface AgentApi {
   start(): Promise<void>;
   stop(): Promise<void>;
   setBounds(r: AgentBounds): void;
+  /** Muestra u oculta la vista del portal sin cambiar su tamaño (sigue funcionando oculta). */
+  setVisible(visible: boolean): void;
   /** Devuelve la función que cancela la suscripción. */
   onEvent(cb: (e: AgentUiEvent) => void): () => void;
 }

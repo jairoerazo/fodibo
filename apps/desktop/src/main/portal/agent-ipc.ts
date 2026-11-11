@@ -8,6 +8,8 @@ import { LlamaServer, MSG_NO_MODEL } from './llama.js';
 export interface ViewLike {
   load(): Promise<void>;
   setBounds(r: AgentBounds): void;
+  /** Oculta o muestra la vista conservando su tamaño: así el agente puede seguir trabajando oculta. */
+  setVisible(visible: boolean): void;
   setAgentActive(active: boolean): void;
   readonly blockedSubmits: number;
   onSubmitBlocked(cb: () => void): void;
@@ -40,6 +42,8 @@ export function errMsg(err: unknown): string {
 export class AgentController {
   private current?: { view: ViewLike; adapter: AdapterLike };
   private lastBounds: AgentBounds = ZERO;
+  /** Oculta hasta que el renderer diga lo contrario. */
+  private lastVisible = false;
   private orchestrator?: AgentOrchestrator;
   private running?: Promise<void>;
   private stopRequested = false;
@@ -57,10 +61,14 @@ export class AgentController {
     if (!made) throw new Error('No hay ventana disponible.');
     this.current = made;
     made.view.setBounds(this.lastBounds);
+    made.view.setVisible(this.lastVisible);
     made.view.onSubmitBlocked(() => {
-      if (!this.orchestrator) return;
+      // Solo hay bloqueos con el agente activo; si aún se está adjuntando, no hay orquestador:
+      // `stopRequested` hace que termine como detenido antes de empezar.
+      if (!this.running) return;
       this.deps.emit({ type: 'log', at: new Date().toISOString(), text: 'Intento de envío bloqueado' });
-      this.orchestrator.stop();
+      this.stopRequested = true;
+      this.orchestrator?.stop();
     });
     try {
       await made.view.load();
@@ -95,6 +103,12 @@ export class AgentController {
     this.current?.view.setBounds(this.lastBounds);
   }
 
+  setVisible(v: unknown): void {
+    if (typeof v !== 'boolean') throw new Error('Visibilidad no válida');
+    this.lastVisible = v;
+    this.current?.view.setVisible(v);
+  }
+
   stop(): void {
     this.stopRequested = true;
     this.orchestrator?.stop();
@@ -117,11 +131,18 @@ export class AgentController {
 
   private async execute(cur: { view: ViewLike; adapter: AdapterLike }): Promise<void> {
     const { emit } = this.deps;
-    emit({ type: 'model', status: 'arrancando' });
-    let baseUrl: string;
     let declaration: Declaration;
     try {
       declaration = this.deps.loadDeclaration();
+    } catch (err) {
+      // Es un fallo del agente (datos de entrada), no del modelo.
+      const message = errMsg(err);
+      emit({ type: 'state', state: 'error', message });
+      throw new Error(message);
+    }
+    emit({ type: 'model', status: 'arrancando' });
+    let baseUrl: string;
+    try {
       this.startingModel = true;
       baseUrl = await this.deps.getLlama().start();
     } catch (err) {
@@ -151,6 +172,9 @@ export class AgentController {
     };
 
     try {
+      // Cada ejecución parte del paso 1, como el banco: un portal ya avanzado acabaría en el
+      // resumen y se daría por entregado sin rellenar nada.
+      await cur.view.load();
       cur.view.setAgentActive(true);
       await cur.adapter.attach();
       const orchestrator = new AgentOrchestrator({
@@ -205,9 +229,17 @@ export function registerAgentIpc(ipc: IpcMainLike, controller: AgentController):
       // límites no válidos: se ignoran
     }
   });
+  ipc.on(AGENT_CHANNELS.visible, (_e, v) => {
+    try {
+      controller.setVisible(v);
+    } catch {
+      // valor no válido: se ignora
+    }
+  });
   return () => {
     for (const ch of [AGENT_CHANNELS.open, AGENT_CHANNELS.close, AGENT_CHANNELS.start, AGENT_CHANNELS.stop]) ipc.removeHandler(ch);
     ipc.removeAllListeners(AGENT_CHANNELS.bounds);
+    ipc.removeAllListeners(AGENT_CHANNELS.visible);
   };
 }
 
