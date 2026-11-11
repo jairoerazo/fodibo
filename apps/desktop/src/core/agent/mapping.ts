@@ -13,34 +13,48 @@ export type FieldPlan = { field: ObservedField } & (
 const MAX_CANDIDATES = 5;
 const MAX_DETAIL = 300;
 
-export function responseSchema(step: ObservedStep): object {
+/**
+ * Esquema JSON de la respuesta del modelo para un paso (gramática de `llama-server`).
+ * `source` y `candidates` solo admiten claves de la declaración de tipo compatible con el campo; la forma
+ * `pending` va primero. Es una ayuda para el modelo: `validateAnswer` sigue siendo la puerta.
+ */
+export function responseSchema(step: ObservedStep, decl: Declaration): object {
   const properties: Record<string, object> = {};
   for (const f of step.fields) {
+    const keys = Object.keys(decl).filter((k) => typeCompatible(f.type, decl[k]!.tipo));
     const forms: object[] = [];
-    if (f.type === 'select') {
-      forms.push({
-        type: 'object',
-        properties: { source: { type: 'string' }, option: { enum: f.options ?? [] } },
-        required: ['source', 'option'],
-        additionalProperties: false,
-      });
-    } else {
-      forms.push({
-        type: 'object',
-        properties: { source: { type: 'string' } },
-        required: ['source'],
-        additionalProperties: false,
-      });
-    }
     forms.push({
       type: 'object',
       properties: {
         pending: { type: 'string' },
-        candidates: { type: 'array', items: { type: 'string' }, maxItems: MAX_CANDIDATES },
+        candidates:
+          keys.length > 0
+            ? { type: 'array', items: { enum: keys }, maxItems: MAX_CANDIDATES }
+            : { type: 'array', maxItems: 0 },
       },
       required: ['pending'],
       additionalProperties: false,
     });
+    if (keys.length > 0) {
+      if (f.type === 'select') {
+        const options = f.options ?? [];
+        if (options.length > 0) {
+          forms.push({
+            type: 'object',
+            properties: { source: { enum: keys }, option: { enum: options } },
+            required: ['source', 'option'],
+            additionalProperties: false,
+          });
+        }
+      } else {
+        forms.push({
+          type: 'object',
+          properties: { source: { enum: keys } },
+          required: ['source'],
+          additionalProperties: false,
+        });
+      }
+    }
     forms.push({
       type: 'object',
       properties: { skip: { const: true } },

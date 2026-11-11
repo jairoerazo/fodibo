@@ -77,6 +77,7 @@ describe('LlamaServer', () => {
     const info = JSON.parse((await import('node:fs')).readFileSync(pidFile, 'utf8')) as { pid: number; args: string[] };
     expect(info.args).toEqual(['-m', model, '--host', '127.0.0.1', '--port', port, '-c', '8192', '--temp', '0', '-t', '4']);
     expect(server.pid).toBe(info.pid);
+    expect(server.spawnArgs).toEqual([okScript, ...info.args]);
     await server.stop();
     expect(server.pid).toBeUndefined();
   });

@@ -141,7 +141,7 @@ export class AgentOrchestrator {
 
   private async plan(step: ObservedStep): Promise<FieldPlan[] | null> {
     const messages = buildMessages(step, this.opts.declaration);
-    const schema = responseSchema(step);
+    const schema = responseSchema(step, this.opts.declaration);
     for (let attempt = 0; attempt < 2; attempt++) {
       this.check();
       try {

@@ -294,6 +294,7 @@ export interface BenchRun {
 export interface BenchReport {
   model: string;
   sha256: string;
+  /** `args`: lista completa de argumentos con la que se lanzó `llama-server`. */
   llamaServer: { binary: string; version: string; args: string[] };
   runs: BenchRun[];
   accept: { ok: boolean; reasons: string[] };
@@ -481,7 +482,7 @@ export async function runBench(argv: string[], env: NodeJS.ProcessEnv, llama: { 
   const report: BenchReport = {
     model: basename(modelPath),
     sha256,
-    llamaServer: { binary, version, args: extraArgs },
+    llamaServer: { binary, version, args: server.spawnArgs },
     runs: results,
     accept: accept(results.map((r) => r.score)),
   };

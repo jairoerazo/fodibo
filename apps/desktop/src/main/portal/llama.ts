@@ -49,6 +49,9 @@ export class LlamaServer {
 
   constructor(private readonly opts: LlamaServerOptions) {}
 
+  /** Argumentos con los que se lanzó el último proceso (vacío si aún no se lanzó). */
+  spawnArgs: string[] = [];
+
   /** PID del proceso en marcha (para medir su memoria), o `undefined`. */
   get pid(): number | undefined {
     const c = this.child;
@@ -76,6 +79,7 @@ export class LlamaServer {
     const spawn = this.opts.spawn ?? nodeSpawn;
     const args = [...(this.opts.args ?? []), '-m', modelPath, '--host', '127.0.0.1', '--port', String(port), '-c', '8192', '--temp', '0', ...(this.opts.extraArgs ?? [])];
 
+    this.spawnArgs = args;
     let child: ChildProcess;
     try {
       child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] });

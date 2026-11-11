@@ -216,10 +216,10 @@ describe('propiedad de seguridad: ningun valor sale del modelo', () => {
 });
 
 describe('responseSchema', () => {
-  const validate = new Ajv2020({ strict: false }).compile(responseSchema(mk()));
+  const validate = new Ajv2020({ strict: false }).compile(responseSchema(mk(), decl));
   it('acepta la respuesta correcta', () => {
     expect(validate(good())).toBe(true);
-    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['a'] } })).toBe(true);
+    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['salario_bruto'] } })).toBe(true);
   });
   it('rechaza field_id extra o faltante, option fuera de lista, option en no-select', () => {
     expect(validate({ ...good(), extra: { skip: true } })).toBe(false);
@@ -228,6 +228,64 @@ describe('responseSchema', () => {
     expect(validate({ ...good(), f_select: { source: 'estado_civil', option: 'viudo' } })).toBe(false);
     expect(validate({ ...good(), f_text: { source: 'apellido', option: 'x' } })).toBe(false);
     expect(validate({ ...good(), f_text: { source: 'apellido', valor: 'x' } })).toBe(false);
-    expect(validate({ ...good(), f_text: { pending: 'x', candidates: Array(6).fill('a') } })).toBe(false);
+    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: Array(6).fill('salario_bruto') } })).toBe(false);
+  });
+});
+
+describe('responseSchema restringido a la declaración', () => {
+  const ajv = new Ajv2020({ strict: false });
+  const forms = (schema: object, id: string): Record<string, any>[] =>
+    (schema as any).properties[id].oneOf as Record<string, any>[];
+
+  it('source solo admite claves de tipo compatible', () => {
+    const validate = ajv.compile(responseSchema(mk(), decl));
+    expect(validate({ ...good(), f_amount: { source: 'apellido' } })).toBe(false); // text en amount
+    expect(validate({ ...good(), f_amount: { source: 'no_existe' } })).toBe(false);
+    expect(validate({ ...good(), f_amount: { source: 'Bruttolohn' } })).toBe(false); // etiqueta en vez de clave
+    expect(validate({ ...good(), f_amount: { source: 'salario_neto' } })).toBe(true);
+    expect(validate({ ...good(), f_select: { source: 'apellido', option: 'casado' } })).toBe(false);
+    const amountKeys = forms(responseSchema(mk(), decl), 'f_amount').find((x) => x.required.includes('source'))!.properties.source.enum;
+    expect(amountKeys).toEqual(Object.keys(decl).filter((k) => decl[k]!.tipo === 'amount'));
+  });
+
+  it('candidates solo admite claves compatibles', () => {
+    const validate = ajv.compile(responseSchema(mk(), decl));
+    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['salario_bruto', 'salario_neto'] } })).toBe(true);
+    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['apellido'] } })).toBe(false);
+    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['a'] } })).toBe(false);
+  });
+
+  it('la forma pending va primero en cada oneOf', () => {
+    const schema = responseSchema(mk(), decl);
+    for (const id of ['f_text', 'f_date', 'f_amount', 'f_select', 'f_opt']) {
+      expect(forms(schema, id)[0]!.required).toEqual(['pending']);
+    }
+  });
+
+  it('sin claves compatibles: solo pending y skip, y candidates vacío', () => {
+    const s = step([f({ field_id: 'f_bool', type: 'checkbox', required: true })]);
+    const schema = responseSchema(s, decl); // la declaración de prueba no tiene booleanos
+    expect(forms(schema, 'f_bool').map((x) => x.required)).toEqual([['pending'], ['skip']]);
+    const validate = ajv.compile(schema);
+    expect(validate({ f_bool: { source: 'apellido' } })).toBe(false);
+    expect(validate({ f_bool: { pending: 'sin dato' } })).toBe(true);
+    expect(validate({ f_bool: { pending: 'sin dato', candidates: [] } })).toBe(true);
+    expect(validate({ f_bool: { pending: 'sin dato', candidates: ['apellido'] } })).toBe(false);
+  });
+
+  it('select sin opciones: sin forma source+option', () => {
+    const s = step([f({ field_id: 'f_sel', type: 'select', options: [] }), f({ field_id: 'f_sel2', type: 'select' })]);
+    const schema = responseSchema(s, decl);
+    for (const id of ['f_sel', 'f_sel2']) expect(forms(schema, id).map((x) => x.required)).toEqual([['pending'], ['skip']]);
+    expect(ajv.compile(schema)({ f_sel: { pending: 'x' }, f_sel2: { skip: true } })).toBe(true);
+  });
+
+  it('validateAnswer sigue siendo la puerta: una respuesta fuera del esquema se rechaza o queda pendiente', () => {
+    const s = mk();
+    const a = { ...good(), f_amount: { source: 'apellido' } };
+    expect(ajv.compile(responseSchema(s, decl))(a)).toBe(false);
+    const v = validateAnswer(s, decl, a);
+    expect(v.ok).toBe(true);
+    if (v.ok) expect(v.plan.find((p) => p.field.field_id === 'f_amount')!.action).toBe('pending');
   });
 });
