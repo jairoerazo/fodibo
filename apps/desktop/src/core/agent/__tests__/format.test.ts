@@ -14,8 +14,13 @@ describe('formatForField', () => {
     expect(formatForField({ tipo: 'amount', valor: '85400', moneda: 'CHF' }, field('amount'))).toBe('85400.00');
     expect(formatForField({ tipo: 'amount', valor: '7056.5', moneda: 'CHF' }, field('amount'))).toBe('7056.50');
   });
-  it('IBAN en grupos de 4', () => {
-    expect(formatForField({ tipo: 'iban', valor: 'CH9300762011623852957' }, field('iban'))).toBe('CH93 0076 2011 6238 5295 7');
+  it('IBAN compacto en mayúsculas, sin espacios (R6: «IBAN ohne Leerzeichen»)', () => {
+    expect(formatForField({ tipo: 'iban', valor: 'CH9300762011623852957' }, field('iban'))).toBe('CH9300762011623852957');
+    expect(formatForField({ tipo: 'iban', valor: 'ch93 0076 2011 6238 5295 7' }, field('iban'))).toBe('CH9300762011623852957');
+  });
+  it('el IBAN compacto se compara igual que el agrupado', () => {
+    const w = formatForField({ tipo: 'iban', valor: 'CH9300762011623852957' }, field('iban'));
+    expect(normalize('iban', w)).toBe(normalize('iban', 'CH93 0076 2011 6238 5295 7'));
   });
   it('checkbox y texto', () => {
     expect(formatForField({ tipo: 'boolean', valor: true }, field('checkbox'))).toBe('true');

@@ -12,7 +12,7 @@ export function formatForField(entry: DeclEntry, field: ObservedField): string {
     case 'amount':
       return Number(s).toFixed(2);
     case 'iban':
-      return normalize('iban', s).replace(/(.{4})(?=.)/g, '$1 ');
+      return normalize('iban', s);
     default:
       return s;
   }

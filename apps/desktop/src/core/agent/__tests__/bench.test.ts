@@ -40,7 +40,7 @@ function perfect(): FieldResult[] {
     r(2, 'Bruttolohn', filled('salario_bruto', '85400.00')),
     r(2, 'AHV/IV/EO-Beiträge', { kind: 'pending', reason: 'sin_dato', candidates: [] }),
     r(3, 'Krankenkassenprämien', pending),
-    r(4, 'IBAN', filled('iban', 'CH93 0076 2011 6238 5295 7')),
+    r(4, 'IBAN', filled('iban', 'CH9300762011623852957')),
     r(4, 'Zweites Bankkonto', { kind: 'skipped' }),
   ];
 }
