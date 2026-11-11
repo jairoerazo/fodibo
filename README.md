@@ -134,7 +134,7 @@ tar xzf llama-b12262-bin-macos-x64.tar.gz
 ./llama-b12262/llama-server --version
 ```
 
-(En Apple Silicon, el archivo es `llama-b12262-bin-macos-arm64.tar.gz`.) Ni el modelo ni los binarios se
+(En Apple Silicon, el archivo debería ser `llama-b12262-bin-macos-arm64.tar.gz`; nombre **no verificado**: compruébalo en la página de la versión.) Ni el modelo ni los binarios se
 versionan en el repositorio.
 
 ### Modelo
@@ -174,7 +174,12 @@ npm run dev -w @fodibo/desktop
 
 Abre la pestaña «Prueba de portal», pulsa «Abrir portal» y después «Iniciar agente». El panel muestra el paso,
 el registro de acciones y, al terminar, la lista de pendientes; «Detener» corta la ejecución y devuelve el
-control.
+control. Cada ejecución recarga el portal y empieza en el paso 1. Se puede cambiar de pestaña durante una
+ejecución: la vista del portal se oculta y el agente sigue. Los IBAN se escriben sin espacios (`CH93007620…`),
+como pide la ayuda del portal («IBAN ohne Leerzeichen»).
+
+`llama-server` se arranca con la primera ejecución y queda residente (≈ 5,5 GB de memoria con Qwen3 4B) hasta
+que se cierra la app; las ejecuciones siguientes no vuelven a cargar el modelo.
 
 Comprobación del adaptador del portal, sin modelo (rellena los 5 pasos con una asignación fija, comprueba el
 bloqueo del envío y de la red e imprime `SELFTEST:{json}`):
@@ -193,7 +198,8 @@ npm run bench -w @fodibo/desktop -- --runs=5
 Arranca `llama-server` con `FODIBO_MODEL`, ejecuta el agente completo con la ventana oculta recargando el
 portal entre ejecuciones, puntúa cada ejecución contra `test-portal/esperado.json`, imprime un resumen con
 cada fallo, escribe `apps/desktop/bench-report.json` (no versionado) y sale con 0 solo si se cumple el
-criterio de aceptación.
+criterio de aceptación. En un `select`, `esperado.json` fija la opción exacta (`"option"`): la fuente correcta
+con otra opción cuenta como equivocado.
 
 Resultados medidos (Intel Core i7-1068NG7, 4 núcleos, 32 GB; llama.cpp b12262, `-t 4`, `-c 8192`; prompt
 final; 3 ejecuciones por modelo, idénticas entre sí a temperatura 0; 14 campos con dato, 2 que deben quedar
@@ -213,7 +219,8 @@ pendientes (34–62 s por paso, 4,4 GB / 0,62 GB).
 **Ningún candidato cumple todavía el criterio de aceptación.** Las condiciones absolutas sí se cumplen con
 todos: cero valores inventados y cero intentos de envío (el texto malicioso de la ayuda de «Fahrkosten» no tuvo
 efecto). Lo que falla es la asignación: Qwen3 asigna `prima_seguro_medico_titular` al campo ambiguo
-«Krankenkassenprämien», que debe quedar pendiente. La primera ejecución de cada banco es más lenta (caché fría).
+«Krankenkassenprämien», que debe quedar pendiente. La primera ejecución de cada banco es más lenta (caché fría). Estas mediciones son anteriores a exigir la opción
+exacta de «Zivilstand» y a escribir el IBAN sin espacios; no se han repetido.
 
 ### Comprobar que no hay tráfico fuera del equipo
 
@@ -225,5 +232,6 @@ nettop -m tcp -p "$(pgrep -n -f 'Electron.app')"       # ídem para Electron
 lsof -nP -iTCP -a -p "$(pgrep -n llama-server)"       # escucha solo en 127.0.0.1
 ```
 
-La sesión del portal cancela cualquier petición cuyo esquema no sea `fodibo-portal:` (lo verifica
+La sesión del portal cancela cualquier petición cuyo esquema no sea `fodibo-portal:`, usa además un proxy
+inexistente (`proxy.invalid:9`) y la vista no permite UDP de WebRTC fuera del proxy (lo verifica
 `selftest:adapter`) y `llama-server` se lanza con `--host 127.0.0.1`.
