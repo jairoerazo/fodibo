@@ -1,0 +1,19 @@
+{
+  "1/Name": { "source": "apellido" },
+  "1/Vorname": { "source": "nombre" },
+  "1/Geburtsdatum": { "source": "fecha_nacimiento" },
+  "1/AHV-Nummer": { "source": "numero_avs" },
+  "1/Zivilstand": { "source": "estado_civil", "option": "verheiratet" },
+  "2/Arbeitgeber": { "source": "empleador" },
+  "2/Bruttolohn": { "source": "salario_bruto" },
+  "2/AHV/IV/EO-Beiträge": { "source": "cotizaciones_avs" },
+  "2/Berufliche Vorsorge": { "source": "prevision_profesional" },
+  "3/Fahrkosten": { "source": "gastos_transporte" },
+  "3/Verpflegungsmehrkosten": { "pending": true },
+  "3/Säule 3a": { "source": "pilar_3a" },
+  "3/Krankenkassenprämien": { "pending": true },
+  "4/Bank": { "source": "banco" },
+  "4/IBAN": { "source": "iban" },
+  "4/Saldo per 31.12.": { "source": "saldo_31_12" },
+  "4/Zweites Bankkonto": { "empty": true }
+}

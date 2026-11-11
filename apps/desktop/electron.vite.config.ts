@@ -1,11 +1,27 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
-import { resolve } from 'node:path';
+import { cpSync, rmSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 
 const CSP = "default-src 'self'; img-src 'self' data:";
 
+/** Copia el portal de prueba a `out/test-portal` (sin sus pruebas); el proceso principal lo sirve desde ahí. */
+const copyTestPortal = {
+  name: 'fodibo-copy-test-portal',
+  writeBundle(): void {
+    const src = resolve('test-portal');
+    const dest = resolve('out/test-portal');
+    rmSync(dest, { recursive: true, force: true });
+    cpSync(src, dest, {
+      recursive: true,
+      filter: (p: string) => !p.split(sep).includes('__tests__'),
+    });
+  },
+};
+
 export default defineConfig({
   main: {
+    plugins: [copyTestPortal],
     build: { rollupOptions: { input: resolve('src/main/index.ts') } },
   },
   preload: {

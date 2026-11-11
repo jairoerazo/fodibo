@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ReceivedPackage } from '../core/transfer/index.js';
+import { AgentPanel } from './components/AgentPanel.js';
 import { PackageList } from './components/PackageList.js';
 import { QrPanel } from './components/QrPanel.js';
 import { cleanIpcError } from './format.js';
@@ -20,6 +21,7 @@ export function App() {
   const [view, setView] = useState<View>({ kind: 'idle' });
   const [packages, setPackages] = useState<ReceivedPackage[]>([]);
   const [error, setError] = useState<string>();
+  const [tab, setTab] = useState<'recibir' | 'portal'>('recibir');
 
   useEffect(() => {
     const off = window.fodibo.onEvent((e) => {
@@ -67,8 +69,18 @@ export function App() {
   }, []);
 
   return (
-    <main>
+    <main className={tab === 'portal' ? 'wide' : undefined}>
       <h1>FODIBO</h1>
+      <nav className="tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === 'recibir'} onClick={() => setTab('recibir')}>
+          Recibir del móvil
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'portal'} onClick={() => setTab('portal')}>
+          Prueba de portal
+        </button>
+      </nav>
+      <AgentPanel visible={tab === 'portal'} />
+      <div hidden={tab !== 'recibir'} className="tab-body">
       {error && (
         <p role="alert" className="error">
           {error}
@@ -98,6 +110,7 @@ export function App() {
       )}
       <h2>Paquetes recibidos</h2>
       <PackageList packages={packages} onOpen={open} />
+      </div>
     </main>
   );
 }

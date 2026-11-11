@@ -8,6 +8,8 @@
     "dev:server": "tsx scripts/dev-server.ts",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "selftest:adapter": "electron-vite build && electron . --selftest-adapter",
+    "bench": "electron-vite build && electron . --bench",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.web.json"
   },
   "dependencies": {
