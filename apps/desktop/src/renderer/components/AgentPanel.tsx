@@ -23,8 +23,6 @@ const STATE_TEXT: Record<AgentState, string> = {
 
 const MODEL_TEXT = { arrancando: 'Arrancando…', listo: 'Listo', error: 'Error' } as const;
 
-const ZERO = { x: 0, y: 0, width: 0, height: 0 };
-
 interface LogLine {
   at: string;
   text: string;
@@ -44,6 +42,7 @@ export function AgentPanel({ visible }: { visible: boolean }) {
   const [modelStatus, setModelStatus] = useState<keyof typeof MODEL_TEXT>();
   const [agentState, setAgentState] = useState<AgentState>('inactivo');
   const [stateMessage, setStateMessage] = useState<string>();
+  const [step, setStep] = useState<{ n: number; total?: number }>();
   const [log, setLog] = useState<LogLine[]>([]);
   const [pending, setPending] = useState<FieldResult[]>();
   const [error, setError] = useState<string>();
@@ -62,6 +61,7 @@ export function AgentPanel({ visible }: { visible: boolean }) {
         } else if (e.type === 'state') {
           setAgentState(e.state);
           setStateMessage(e.message);
+          setStep(e.state === 'rellenando' && e.step !== undefined ? { n: e.step, ...(e.total !== undefined ? { total: e.total } : {}) } : undefined);
         } else if (e.type === 'log') {
           setLog((prev) => [...prev, { at: e.at, text: e.text }]);
         } else if (e.type === 'finished') {
@@ -72,12 +72,11 @@ export function AgentPanel({ visible }: { visible: boolean }) {
     [],
   );
 
+  // Oculta, la vista no se encoge (setVisible(false) conserva su tamaño): un hueco de 0×0 haría
+  // fallar `elementFromPoint` y el agente no podría seguir si el usuario cambia de pestaña.
   const sendBounds = useCallback(() => {
     const el = holder.current;
-    if (!visibleRef.current || !el) {
-      window.fodiboAgent.setBounds(ZERO);
-      return;
-    }
+    if (!visibleRef.current || !el) return;
     const r = el.getBoundingClientRect();
     window.fodiboAgent.setBounds({
       x: Math.max(0, r.x),
@@ -89,6 +88,7 @@ export function AgentPanel({ visible }: { visible: boolean }) {
 
   useEffect(() => {
     sendBounds();
+    window.fodiboAgent.setVisible(visible);
     const el = holder.current;
     if (!el || !visible) return;
     const ro = new ResizeObserver(sendBounds);
@@ -102,10 +102,10 @@ export function AgentPanel({ visible }: { visible: boolean }) {
     };
   }, [visible, portalOpen, sendBounds]);
 
-  // El contenido variable de encima (error, estado, registro) desplaza el hueco sin cambiar su tamaño.
+  // El contenido variable de encima (error, estado) puede desplazar o encoger el hueco.
   useLayoutEffect(() => {
     sendBounds();
-  }, [error, log, pending, agentState, stateMessage, modelStatus, sendBounds]);
+  }, [error, log, pending, agentState, stateMessage, step, modelStatus, sendBounds]);
 
   const open = async () => {
     setError(undefined);
@@ -121,6 +121,10 @@ export function AgentPanel({ visible }: { visible: boolean }) {
     setError(undefined);
     setPending(undefined);
     setLog([]);
+    // El estado de la ejecución anterior (p. ej. un error) no debe verse como el de la nueva.
+    setAgentState('inactivo');
+    setStateMessage(undefined);
+    setStep(undefined);
     setRunning(true);
     try {
       await window.fodiboAgent.start();
@@ -134,9 +138,11 @@ export function AgentPanel({ visible }: { visible: boolean }) {
     window.fodiboAgent.stop().catch((err: unknown) => setError(cleanIpcError(err)));
   };
 
+  const stepText = step ? ` · Paso ${step.n}${step.total !== undefined ? `/${step.total}` : ''}` : '';
+
   return (
-    <section hidden={!visible} aria-label="Prueba de portal">
-      <div className="panel">
+    <section hidden={!visible} aria-label="Prueba de portal" className="agent-panel">
+      <div className="agent-controls">
         <div className="row">
           <button type="button" onClick={() => void open()}>
             Abrir portal
@@ -150,55 +156,62 @@ export function AgentPanel({ visible }: { visible: boolean }) {
         </div>
         <p className="status">
           Modelo: {modelStatus ? MODEL_TEXT[modelStatus] : 'sin iniciar'} · Agente: {STATE_TEXT[agentState]}
+          {stepText}
           {stateMessage ? ` — ${stateMessage}` : ''}
         </p>
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
       </div>
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-      <div ref={holder} className="portal-holder" aria-label="Vista del portal" />
-      {log.length > 0 && (
-        <ul className="agent-log">
-          {log.map((l, i) => (
-            <li key={i}>{l.text}</li>
-          ))}
-        </ul>
-      )}
-      {pending && (
-        <div className="pending">
-          {pending.length === 0 ? <p>No quedan pendientes.</p> : <h3>Pendientes</h3>}
-          {groupByStep(pending).map((g) => (
-            <div key={g.step} className="card">
-              <h4>
-                <span>Paso {g.step}</span> · <span>{g.title}</span>
-              </h4>
-              <ul>
-                {g.items.map((r) => (
-                  <li key={r.field_id}>
-                    <strong>{r.label}</strong>
-                    {r.outcome.kind === 'pending' && (
-                      <>
-                        {' — '}
-                        {REASON_TEXT[r.outcome.reason]}
-                        {r.outcome.candidates.length > 0 && (
-                          <ul>
-                            {r.outcome.candidates.map((c) => (
-                              <li key={c.key}>{`${c.key}: ${c.valor}`}</li>
-                            ))}
-                          </ul>
+      <div className="agent-body">
+        <div ref={holder} className="portal-holder" aria-label="Vista del portal" />
+        {/* Los pendientes (lo que el usuario debe completar) van antes que el registro. */}
+        <section className="agent-side" aria-label="Registro y pendientes">
+          {log.length === 0 && !pending && <p className="empty">Sin actividad.</p>}
+          {pending && (
+            <div className="pending">
+              {pending.length === 0 ? agentState === 'entregado' && <p>No quedan pendientes.</p> : <h3>Pendientes</h3>}
+              {groupByStep(pending).map((g) => (
+                <div key={g.step} className="card">
+                  <h4>
+                    <span>Paso {g.step}</span> · <span>{g.title}</span>
+                  </h4>
+                  <ul>
+                    {g.items.map((r) => (
+                      <li key={r.field_id}>
+                        <strong>{r.label}</strong>
+                        {r.outcome.kind === 'pending' && (
+                          <>
+                            {' — '}
+                            {REASON_TEXT[r.outcome.reason]}
+                            {r.outcome.candidates.length > 0 && (
+                              <ul>
+                                {r.outcome.candidates.map((c) => (
+                                  <li key={c.key}>{`${c.key}: ${c.valor}`}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </>
                         )}
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+              <p>Control entregado. Completa los pendientes, revisa y pulsa «Einreichen».</p>
             </div>
-          ))}
-          <p>Control entregado. Completa los pendientes, revisa y pulsa «Einreichen».</p>
-        </div>
-      )}
+          )}
+          {log.length > 0 && (
+            <ul className="agent-log">
+              {log.map((l, i) => (
+                <li key={i}>{l.text}</li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
     </section>
   );
 }

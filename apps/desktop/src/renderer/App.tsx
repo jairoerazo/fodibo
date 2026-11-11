@@ -69,7 +69,7 @@ export function App() {
   }, []);
 
   return (
-    <main>
+    <main className={tab === 'portal' ? 'wide' : undefined}>
       <h1>FODIBO</h1>
       <nav className="tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === 'recibir'} onClick={() => setTab('recibir')}>
@@ -80,7 +80,7 @@ export function App() {
         </button>
       </nav>
       <AgentPanel visible={tab === 'portal'} />
-      <div hidden={tab !== 'recibir'}>
+      <div hidden={tab !== 'recibir'} className="tab-body">
       {error && (
         <p role="alert" className="error">
           {error}
