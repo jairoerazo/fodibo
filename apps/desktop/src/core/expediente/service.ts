@@ -1,10 +1,39 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CONCEPTS, type Concept } from '../agent/index.js';
+import type { DeclType } from '../agent/types.js';
 import { ExpedienteError } from './errors.js';
+import {
+  decodeValor,
+  deleteField as deleteFieldTx,
+  keyFor,
+  proposeField as proposeFieldTx,
+  saveField as saveFieldTx,
+  setDocument as setDocumentTx,
+  type DocumentPatch,
+  type FieldInput,
+  type FieldState,
+  type FieldsContext,
+  type ProposedFieldInput,
+} from './fields.js';
 import { importPackage, listImportable, recoverStore, type ImportContext, type ImportResult, type ImportablePackage, type RecoverResult } from './import.js';
 import { BlobStore, openStore, type CaseStore } from './storage/index.js';
-import { ACTOR_LOCAL, CANTONS, PERSON_ROLES, type Canton, type ChangeEntity, type PersonRole, type PersonRow } from './types.js';
+import {
+  ACTOR_LOCAL,
+  CANTONS,
+  PERSON_ROLES,
+  type Canton,
+  type ChangeEntity,
+  type DocStatus,
+  type DocType,
+  type DocumentRow,
+  type Evidence,
+  type FieldOrigin,
+  type FieldRow,
+  type FieldStatus,
+  type PersonRole,
+  type PersonRow,
+} from './types.js';
 
 export type CaseInput = { taxYear: number; jurisdiction: Canton; persons: Array<{ role: PersonRole; label: string }> };
 export type CaseUpdate = {
@@ -14,7 +43,50 @@ export type CaseUpdate = {
   persons?: Array<{ slug?: string; role: PersonRole; label: string }>;
 };
 export type PersonView = { personId: string; role: PersonRole; ordinal: number; slug: string; label: string };
-export type CaseView = { caseId: string; taxYear: number; jurisdiction: Canton; revision: number; createdAt: string; persons: PersonView[] };
+export type DocumentView = {
+  documentId: string;
+  sha256: string;
+  mime: string;
+  size: number;
+  originalName: string;
+  docType: DocType | null;
+  status: DocStatus;
+  sourceDevice: string;
+  importedAt: string;
+};
+export type FieldView = {
+  fieldId: string;
+  conceptId: string;
+  variant: string;
+  /** Clave de la declaración (`keyFor(conceptId, variant)`). */
+  key: string;
+  tipo: DeclType;
+  valor: string | boolean;
+  moneda: string | null;
+  origin: FieldOrigin;
+  status: FieldStatus;
+  updatedAt: string;
+  evidence: Evidence[];
+};
+export type CaseView = {
+  caseId: string;
+  taxYear: number;
+  jurisdiction: Canton;
+  revision: number;
+  createdAt: string;
+  persons: PersonView[];
+  documents: DocumentView[];
+  fields: FieldView[];
+};
+export type ConceptView = { id: string; tipo: DeclType; labels: string[]; variants: boolean; values?: string[] };
+export type FieldHistoryEntry = {
+  at: string;
+  actor: string;
+  action: 'create' | 'update' | 'delete';
+  before: FieldState | null;
+  after: FieldState | null;
+  revision: number;
+};
 export type CaseSummary = {
   caseId: string;
   taxYear: number;
@@ -74,6 +146,30 @@ function checkRoleCounts(roles: PersonRole[]): void {
 
 const personView = (p: PersonRow): PersonView => ({ personId: p.person_id, role: p.role, ordinal: p.ordinal, slug: p.slug, label: p.label });
 const json = (v: unknown): string | null => (v === null ? null : JSON.stringify(v));
+const documentView = (d: DocumentRow): DocumentView => ({
+  documentId: d.document_id,
+  sha256: d.sha256,
+  mime: d.mime,
+  size: d.size,
+  originalName: d.original_name,
+  docType: d.doc_type,
+  status: d.status,
+  sourceDevice: d.source_device,
+  importedAt: d.imported_at,
+});
+const fieldView = (f: FieldRow, evidence: Evidence[]): FieldView => ({
+  fieldId: f.field_id,
+  conceptId: f.concept_id,
+  variant: f.variant,
+  key: keyFor(f.concept_id, f.variant),
+  tipo: f.tipo,
+  valor: decodeValor(f),
+  moneda: f.moneda,
+  origin: f.origin,
+  status: f.status,
+  updatedAt: f.updated_at,
+  evidence,
+});
 const personJson = (p: PersonRow) => ({ role: p.role, ordinal: p.ordinal, slug: p.slug, label: p.label });
 
 export class ExpedienteService {
@@ -225,6 +321,12 @@ export class ExpedienteService {
   getCase(caseId: string): CaseView {
     const row = this.store.getCase(caseId);
     if (!row) throw new ExpedienteError('not_found', 'Expediente no encontrado.');
+    const evidence = new Map<string, Evidence[]>();
+    for (const e of this.store.listCaseEvidence(caseId)) {
+      const list = evidence.get(e.field_id) ?? [];
+      list.push({ documentId: e.document_id, page: e.page });
+      evidence.set(e.field_id, list);
+    }
     return {
       caseId: row.case_id,
       taxYear: row.tax_year,
@@ -232,7 +334,56 @@ export class ExpedienteService {
       revision: row.revision,
       createdAt: row.created_at,
       persons: this.store.listPersons(caseId).map(personView),
+      documents: this.store.listDocuments(caseId).map(documentView),
+      fields: this.store.listFields(caseId).map((f) => fieldView(f, evidence.get(f.field_id) ?? [])),
     };
+  }
+
+  private fieldsContext(): FieldsContext {
+    return { store: this.store, concepts: this.concepts, now: this.now, commitChange: (caseId, entries) => this.commitChange(caseId, entries) };
+  }
+
+  /**
+   * Cambia tipo y/o estado de un documento (spec §7.1). Síncrono: una única transacción, sin pasar por `enqueue`
+   * (igual que `createCase`/`updateCase`); el llamador puede `await`ar el resultado igualmente.
+   */
+  setDocument(documentId: string, patch: DocumentPatch): CaseView {
+    const caseId = this.transact(() => setDocumentTx(this.fieldsContext(), documentId, patch));
+    return this.getCase(caseId);
+  }
+
+  /** Alta (sin `fieldId`) o corrección (con `fieldId`) de un campo por el usuario; queda `confirmado`. Síncrono. */
+  saveField(caseId: string, input: FieldInput): CaseView {
+    this.transact(() => saveFieldTx(this.fieldsContext(), caseId, input));
+    return this.getCase(caseId);
+  }
+
+  /** Solo núcleo (sin IPC): alta de un campo `pendiente` propuesto por una regla o el modelo. Síncrono. */
+  proposeField(caseId: string, input: ProposedFieldInput): CaseView {
+    this.transact(() => proposeFieldTx(this.fieldsContext(), caseId, input));
+    return this.getCase(caseId);
+  }
+
+  /** Borra el campo; su historial se conserva. Síncrono. */
+  deleteField(fieldId: string): CaseView {
+    const caseId = this.transact(() => deleteFieldTx(this.fieldsContext(), fieldId));
+    return this.getCase(caseId);
+  }
+
+  listConcepts(): ConceptView[] {
+    return this.concepts.map((c) => ({ id: c.id, tipo: c.tipo, labels: [...c.labels], variants: c.variants === true, ...(c.values ? { values: [...c.values] } : {}) }));
+  }
+
+  /** Historial de un campo (también borrado) en orden cronológico. */
+  fieldHistory(fieldId: string): FieldHistoryEntry[] {
+    return this.store.listFieldChanges(fieldId).map((c) => ({
+      at: c.at,
+      actor: c.actor,
+      action: c.action as FieldHistoryEntry['action'],
+      before: c.before === null ? null : (JSON.parse(c.before) as FieldState),
+      after: c.after === null ? null : (JSON.parse(c.after) as FieldState),
+      revision: c.revision,
+    }));
   }
 
   createCase(input: CaseInput): CaseView {

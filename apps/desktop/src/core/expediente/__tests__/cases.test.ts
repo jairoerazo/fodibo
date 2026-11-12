@@ -138,6 +138,7 @@ describe('updateCase', () => {
       )
       .run(c.caseId);
     raw.close();
+    const unchanged = svc.getCase(c.caseId);
     const events: ExpedienteEvent[] = [];
     svc.on((e) => events.push(e));
     const keep = c.persons.filter((p) => p.slug !== 'partner').map((p) => ({ slug: p.slug, role: p.role, label: p.label }));
@@ -148,7 +149,7 @@ describe('updateCase', () => {
       expect((e as ExpedienteError).code).toBe('person_in_use');
       expect((e as ExpedienteError).details).toEqual({ fieldIds: ['f1'] });
     }
-    expect(svc.getCase(c.caseId)).toEqual(c);
+    expect(svc.getCase(c.caseId)).toEqual(unchanged);
     expect(events).toEqual([]);
   });
 });

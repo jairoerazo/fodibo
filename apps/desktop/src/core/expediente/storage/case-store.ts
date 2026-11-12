@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ExpedienteError } from '../errors.js';
-import type { CaseRow, ChangeRow, DocumentRow, ImportFileRow, ImportRow, PersonRow } from '../types.js';
+import type { CaseRow, ChangeRow, DocumentRow, FieldEvidenceRow, FieldRow, ImportFileRow, ImportRow, PersonRow } from '../types.js';
 import { MIGRATIONS, type Migration } from './schema.js';
 
 export type OpenStoreOptions = {
@@ -44,6 +44,29 @@ export interface CaseStore {
   getDocumentBySha(caseId: string, sha256: string): DocumentRow | undefined;
   /** Hash y tamaño de todos los documentos de todos los expedientes (recuperación al arrancar). */
   listDocumentBlobs(): Array<{ document_id: string; sha256: string; size: number }>;
+  getDocument(documentId: string): DocumentRow | undefined;
+  /** Documentos del expediente por fecha de importación, nombre e id. */
+  listDocuments(caseId: string): DocumentRow[];
+  updateDocument(documentId: string, docType: string | null, status: string): void;
+  getField(fieldId: string): FieldRow | undefined;
+  getFieldByKey(caseId: string, conceptId: string, variant: string): FieldRow | undefined;
+  /** Campos del expediente ordenados por concepto y variante. */
+  listFields(caseId: string): FieldRow[];
+  insertField(row: FieldRow): void;
+  /** Sustituye los valores del campo (todo salvo `field_id`, `case_id`, `concept_id` y `variant`). */
+  updateField(row: FieldRow): void;
+  /** Borra el campo y, en cascada, sus evidencias. */
+  deleteField(fieldId: string): void;
+  /** Evidencias de un campo ordenadas por documento y página. */
+  listEvidence(fieldId: string): FieldEvidenceRow[];
+  /** Evidencias de todos los campos del expediente. */
+  listCaseEvidence(caseId: string): FieldEvidenceRow[];
+  insertEvidence(row: FieldEvidenceRow): void;
+  deleteEvidence(fieldId: string): void;
+  /** Campos cuyas evidencias citan el documento. */
+  fieldIdsCitingDocument(documentId: string): string[];
+  /** Entradas de `changes` de un campo en orden cronológico. */
+  listFieldChanges(fieldId: string): ChangeRow[];
   close(): void;
 }
 
@@ -188,6 +211,28 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
   const getDocumentBySha = conn.prepare('SELECT * FROM documents WHERE case_id = ? AND sha256 = ?');
   const listDocumentBlobs = conn.prepare('SELECT document_id, sha256, size FROM documents ORDER BY document_id');
 
+  const getDocument = conn.prepare('SELECT * FROM documents WHERE document_id = ?');
+  const listDocuments = conn.prepare('SELECT * FROM documents WHERE case_id = ? ORDER BY imported_at, original_name, document_id');
+  const updateDocument = conn.prepare('UPDATE documents SET doc_type = ?, status = ? WHERE document_id = ?');
+  const getField = conn.prepare('SELECT * FROM fields WHERE field_id = ?');
+  const getFieldByKey = conn.prepare('SELECT * FROM fields WHERE case_id = ? AND concept_id = ? AND variant = ?');
+  const listFields = conn.prepare('SELECT * FROM fields WHERE case_id = ? ORDER BY concept_id, variant');
+  const insertField = conn.prepare(
+    `INSERT INTO fields (field_id, case_id, concept_id, variant, tipo, valor, moneda, origin, status, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const updateField = conn.prepare('UPDATE fields SET tipo = ?, valor = ?, moneda = ?, origin = ?, status = ?, updated_at = ? WHERE field_id = ?');
+  const deleteField = conn.prepare('DELETE FROM fields WHERE field_id = ?');
+  const listEvidence = conn.prepare('SELECT * FROM field_evidence WHERE field_id = ? ORDER BY document_id, page');
+  const listCaseEvidence = conn.prepare(
+    `SELECT e.* FROM field_evidence e JOIN fields f ON f.field_id = e.field_id
+     WHERE f.case_id = ? ORDER BY e.field_id, e.document_id, e.page`,
+  );
+  const insertEvidence = conn.prepare('INSERT INTO field_evidence (field_id, document_id, page) VALUES (?, ?, ?)');
+  const deleteEvidence = conn.prepare('DELETE FROM field_evidence WHERE field_id = ?');
+  const fieldIdsCitingDocument = conn.prepare('SELECT DISTINCT field_id FROM field_evidence WHERE document_id = ? ORDER BY field_id');
+  const listFieldChanges = conn.prepare("SELECT * FROM changes WHERE entity = 'field' AND entity_id = ? ORDER BY change_id");
+
   return {
     transaction<T>(fn: () => T): T {
       try {
@@ -271,6 +316,51 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
     },
     listDocumentBlobs() {
       return listDocumentBlobs.all() as Array<{ document_id: string; sha256: string; size: number }>;
+    },
+    getDocument(documentId) {
+      return getDocument.get(documentId) as DocumentRow | undefined;
+    },
+    listDocuments(caseId) {
+      return listDocuments.all(caseId) as DocumentRow[];
+    },
+    updateDocument(documentId, docType, status) {
+      updateDocument.run(docType, status, documentId);
+    },
+    getField(fieldId) {
+      return getField.get(fieldId) as FieldRow | undefined;
+    },
+    getFieldByKey(caseId, conceptId, variant) {
+      return getFieldByKey.get(caseId, conceptId, variant) as FieldRow | undefined;
+    },
+    listFields(caseId) {
+      return listFields.all(caseId) as FieldRow[];
+    },
+    insertField(r) {
+      insertField.run(r.field_id, r.case_id, r.concept_id, r.variant, r.tipo, r.valor, r.moneda, r.origin, r.status, r.updated_at);
+    },
+    updateField(r) {
+      updateField.run(r.tipo, r.valor, r.moneda, r.origin, r.status, r.updated_at, r.field_id);
+    },
+    deleteField(fieldId) {
+      deleteField.run(fieldId);
+    },
+    listEvidence(fieldId) {
+      return listEvidence.all(fieldId) as FieldEvidenceRow[];
+    },
+    listCaseEvidence(caseId) {
+      return listCaseEvidence.all(caseId) as FieldEvidenceRow[];
+    },
+    insertEvidence(r) {
+      insertEvidence.run(r.field_id, r.document_id, r.page);
+    },
+    deleteEvidence(fieldId) {
+      deleteEvidence.run(fieldId);
+    },
+    fieldIdsCitingDocument(documentId) {
+      return (fieldIdsCitingDocument.all(documentId) as Array<{ field_id: string }>).map((r) => r.field_id);
+    },
+    listFieldChanges(fieldId) {
+      return listFieldChanges.all(fieldId) as ChangeRow[];
     },
     close() {
       conn.close();
