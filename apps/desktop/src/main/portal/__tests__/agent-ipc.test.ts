@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentUiEvent } from '../../../shared/agent-ipc.js';
-import { AgentController, createLlamaFromEnv, registerAgentIpc, type AdapterLike, type ViewLike } from '../agent-ipc.js';
+import { ExpedienteError } from '../../../core/expediente/index.js';
+import { AgentController, APPROVAL_MESSAGES, createLlamaFromEnv, registerAgentIpc, type AdapterLike, type AgentDeps, type ViewLike } from '../agent-ipc.js';
+
+const CASE = '3f2b8c1e-5a4d-4e6f-9a1b-2c3d4e5f6a7b';
+const APPROVAL = { caseId: CASE, caseRevision: 7, approvedAt: '2026-11-12T10:00:00.000Z', contentHash: 'a'.repeat(64) };
 
 function setup(
   opts: {
@@ -9,7 +13,7 @@ function setup(
     modelComplete?: () => Promise<unknown>;
     hang?: boolean;
     attach?: () => Promise<void>;
-    loadDeclaration?: () => Record<string, never>;
+    loadDeclaration?: AgentDeps['loadDeclaration'];
   } = {},
 ) {
   const calls: string[] = [];
@@ -53,7 +57,7 @@ function setup(
     createView: () => ({ view, adapter }),
     getLlama: () => llama,
     createModel: () => ({ complete: opts.modelComplete ?? (async () => ({})) }),
-    loadDeclaration: opts.loadDeclaration ?? (() => ({})),
+    loadDeclaration: opts.loadDeclaration ?? (() => ({ declaration: {}, approval: APPROVAL })),
     emit: (e) => {
       events.push(e);
       if (e.type === 'finished' || e.type === 'state') calls.push(`ev:${e.type}`);
@@ -67,7 +71,7 @@ describe('AgentController', () => {
     const llama = createLlamaFromEnv({});
     const { c, events, calls } = setup({ llamaStart: () => llama.start() });
     await c.openPortal();
-    await expect(c.start()).rejects.toThrow('No se encontró el modelo. Define FODIBO_MODEL con la ruta al archivo .gguf.');
+    await expect(c.start(CASE)).rejects.toThrow('No se encontró el modelo. Define FODIBO_MODEL con la ruta al archivo .gguf.');
     expect(events).toContainEqual({
       type: 'model',
       status: 'error',
@@ -80,7 +84,7 @@ describe('AgentController', () => {
   it('entrega: detach, luego setAgentActive(false), luego eventos finales', async () => {
     const { c, calls, events } = setup();
     await c.openPortal();
-    await c.start();
+    await c.start(CASE);
     const i = (s: string) => calls.indexOf(s);
     expect(i('attach')).toBeGreaterThan(i('active:true'));
     expect(i('detach')).toBeGreaterThan(i('attach'));
@@ -95,21 +99,21 @@ describe('AgentController', () => {
     const { c } = setup({ llamaStart: () => new Promise<string>((r) => (release = r)) });
     c.stop();
     await c.openPortal();
-    const first = c.start();
-    await expect(c.start()).rejects.toThrow('Ya hay una ejecución en curso.');
+    const first = c.start(CASE);
+    await expect(c.start(CASE)).rejects.toThrow('Ya hay una ejecución en curso.');
     release('http://127.0.0.1:1');
     await first;
   });
 
   it('start sin portal abierto: error legible', async () => {
     const { c } = setup();
-    await expect(c.start()).rejects.toThrow('Abre el portal');
+    await expect(c.start(CASE)).rejects.toThrow('Abre el portal');
   });
 
   it('envío bloqueado: registra el aviso y detiene la ejecución', async () => {
     const { c, events, trigger } = setup({ hang: true });
     await c.openPortal();
-    const p = c.start();
+    const p = c.start(CASE);
     await new Promise((r) => setTimeout(r, 20));
     trigger();
     await p;
@@ -163,7 +167,7 @@ describe('AgentController', () => {
     let rej!: (e: Error) => void;
     const { c, events } = setup({ llamaStart: () => new Promise<string>((_r, j) => (rej = j)) });
     await c.openPortal();
-    const p = c.start();
+    const p = c.start(CASE);
     c.stop();
     rej(new Error('Arranque del modelo cancelado.'));
     await p;
@@ -176,7 +180,7 @@ describe('AgentController', () => {
     let rej!: (e: Error) => void;
     const { c, calls } = setup({ llamaStart: () => new Promise<string>((_r, j) => (rej = j)) });
     await c.openPortal();
-    const p = c.start().catch(() => {});
+    const p = c.start(CASE).catch(() => {});
     const t0 = Date.now();
     // llama.stop() cancela el arranque pendiente, como hace LlamaServer.
     const dispose = c.dispose();
@@ -191,9 +195,9 @@ describe('AgentController', () => {
     let n = 5;
     const { c, events } = setup({ blocked: () => n, hang: true });
     await c.openPortal();
-    await c.start();
+    await c.start(CASE);
     n = 7;
-    const second = c.start();
+    const second = c.start(CASE);
     await new Promise((r) => setTimeout(r, 20));
     n = 9;
     await second;
@@ -224,8 +228,8 @@ describe('AgentController', () => {
   it('cada ejecución recarga el portal antes de adjuntar el depurador', async () => {
     const { c, calls } = setup();
     await c.openPortal();
-    await c.start();
-    await c.start();
+    await c.start(CASE);
+    await c.start(CASE);
     const loads = calls.reduce<number[]>((a, x, i) => (x === 'load' ? [...a, i] : a), []);
     const attaches = calls.reduce<number[]>((a, x, i) => (x === 'attach' ? [...a, i] : a), []);
     expect(loads).toHaveLength(3); // abrir + 2 ejecuciones
@@ -241,7 +245,7 @@ describe('AgentController', () => {
     const s = setup({ attach: async () => trigger() });
     trigger = () => s.trigger();
     await s.c.openPortal();
-    await s.c.start();
+    await s.c.start(CASE);
     expect(s.events).toContainEqual(expect.objectContaining({ type: 'log', text: 'Intento de envío bloqueado' }));
     expect(s.events).toContainEqual({ type: 'state', state: 'detenido' });
     expect(s.events.some((e) => e.type === 'state' && e.state === 'entregado')).toBe(false);
@@ -255,10 +259,93 @@ describe('AgentController', () => {
       },
     });
     await c.openPortal();
-    await expect(c.start()).rejects.toThrow('No se pudo leer la declaración: JSON roto');
+    await expect(c.start(CASE)).rejects.toThrow('No se pudo leer la declaración: JSON roto');
     expect(events).toContainEqual({ type: 'state', state: 'error', message: 'No se pudo leer la declaración: JSON roto' });
     expect(events.some((e) => e.type === 'model')).toBe(false);
     expect(calls).not.toContain('attach');
     expect(c.isRunning).toBe(false);
+  });
+  it('arranca con aprobación vigente y emite declaration antes de model', async () => {
+    const { c, events } = setup();
+    await c.openPortal();
+    await c.start(CASE);
+    const kinds = events.map((e) => e.type);
+    expect(events).toContainEqual({ type: 'declaration', ...APPROVAL });
+    expect(kinds.indexOf('declaration')).toBeLessThan(kinds.indexOf('model'));
+  });
+
+  it('sin aprobación no arranca: estado error con el texto exacto, sin llama ni attach', async () => {
+    let llamaStarted = false;
+    const { c, events, calls } = setup({
+      llamaStart: async () => {
+        llamaStarted = true;
+        return 'http://127.0.0.1:1';
+      },
+      loadDeclaration: () => {
+        throw new Error(APPROVAL_MESSAGES.no_approval);
+      },
+    });
+    await c.openPortal();
+    await expect(c.start(CASE)).rejects.toThrow(APPROVAL_MESSAGES.no_approval);
+    expect(events).toContainEqual({
+      type: 'state',
+      state: 'error',
+      message: 'No hay ninguna versión aprobada del expediente. Revísalo y apruébalo antes de rellenar el portal.',
+    });
+    expect(llamaStarted).toBe(false);
+    expect(calls).not.toContain('attach');
+  });
+
+  it('textos exactos de approval_stale, approval_corrupt y not_found', () => {
+    expect(APPROVAL_MESSAGES.approval_stale).toBe('El expediente cambió después de la aprobación. Vuelve a aprobarlo.');
+    expect(APPROVAL_MESSAGES.approval_corrupt).toBe('La versión aprobada no supera la comprobación de integridad.');
+    expect(APPROVAL_MESSAGES.not_found).toBe(APPROVAL_MESSAGES.no_approval);
+  });
+
+  it('onCaseChanged del mismo expediente detiene la ejecución con el log exacto; otro expediente no', async () => {
+    const other = setup({ hang: true });
+    await other.c.openPortal();
+    const p0 = other.c.start(CASE);
+    await new Promise((r) => setTimeout(r, 20));
+    other.c.onCaseChanged('00000000-0000-4000-8000-000000000000');
+    await p0;
+    expect(other.events.some((e) => e.type === 'log' && e.text.startsWith('El expediente cambió'))).toBe(false);
+    expect(other.events).not.toContainEqual({ type: 'state', state: 'detenido' });
+
+    const { c, events } = setup({ hang: true });
+    await c.openPortal();
+    const p = c.start(CASE);
+    await new Promise((r) => setTimeout(r, 20));
+    c.onCaseChanged(CASE);
+    await p;
+    expect(events).toContainEqual(expect.objectContaining({ type: 'log', text: 'El expediente cambió: llenado detenido' }));
+    expect(events).toContainEqual({ type: 'state', state: 'detenido' });
+    expect(c.isRunning).toBe(false);
+    // Sin ejecución en curso no hace nada.
+    const n = events.length;
+    c.onCaseChanged(CASE);
+    expect(events).toHaveLength(n);
+  });
+
+  it('agent:start con caseId no válido rechaza sin llamar a loadDeclaration', async () => {
+    const handlers = new Map<string, (...a: unknown[]) => unknown>();
+    let loaded = 0;
+    const { c } = setup({
+      loadDeclaration: () => {
+        loaded++;
+        return { declaration: {} };
+      },
+    });
+    registerAgentIpc(
+      { handle: (ch, l) => void handlers.set(ch, l), on: () => {}, removeHandler: () => {}, removeAllListeners: () => {} },
+      c,
+    );
+    await c.openPortal();
+    for (const bad of [undefined, 'x', CASE.toUpperCase(), 5, `${CASE}0`]) {
+      await expect(handlers.get('agent:start')!({}, bad)).rejects.toThrow(APPROVAL_MESSAGES.no_approval);
+    }
+    expect(loaded).toBe(0);
+    await handlers.get('agent:start')!({}, CASE);
+    expect(loaded).toBe(1);
   });
 });

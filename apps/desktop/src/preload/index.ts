@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('fodibo', api);
 const agentApi: AgentApi = {
   openPortal: () => ipcRenderer.invoke(AGENT_CHANNELS.open),
   closePortal: () => ipcRenderer.invoke(AGENT_CHANNELS.close),
-  start: () => ipcRenderer.invoke(AGENT_CHANNELS.start),
+  start: (caseId) => ipcRenderer.invoke(AGENT_CHANNELS.start, caseId),
   stop: () => ipcRenderer.invoke(AGENT_CHANNELS.stop),
   setBounds: (r) => ipcRenderer.send(AGENT_CHANNELS.bounds, r),
   setVisible: (v) => ipcRenderer.send(AGENT_CHANNELS.visible, v),

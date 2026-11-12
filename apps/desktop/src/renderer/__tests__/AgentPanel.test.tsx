@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentApi, AgentUiEvent } from '../../shared/agent-ipc.js';
 import { AgentPanel } from '../components/AgentPanel.js';
 
+const CASE = '3f2b8c1e-5a4d-4e6f-9a1b-2c3d4e5f6a7b';
 let emit: (e: AgentUiEvent) => void;
 let api: AgentApi;
 
@@ -44,7 +45,7 @@ const pend = (step: number, stepTitle: string, label: string, reason: string, ca
 
 describe('AgentPanel', () => {
   it('muestra pendientes agrupados por paso con motivo y candidatos', () => {
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     const pending = [
       pend(2, 'Ingresos', 'Salario', 'ambiguo', [
         { key: 'bruttolohn_jahr', valor: '85400.00' },
@@ -64,13 +65,13 @@ describe('AgentPanel', () => {
   });
 
   it('«Detener» llama a stop', () => {
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     fireEvent.click(screen.getByRole('button', { name: 'Detener' }));
     expect(api.stop).toHaveBeenCalled();
   });
 
   it('un evento model:error muestra el mensaje', () => {
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     emit({ type: 'model', status: 'error', message: 'No se encontró el modelo. Define FODIBO_MODEL con la ruta al archivo .gguf.' });
     expect(screen.getByRole('alert').textContent).toContain('No se encontró el modelo');
   });
@@ -83,7 +84,7 @@ describe('AgentPanel', () => {
     api.start = vi.fn(async () => {
       order.push('start');
     });
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     await act(async () => {
       fireEvent.click(screen.getByText('Iniciar agente'));
     });
@@ -94,7 +95,7 @@ describe('AgentPanel', () => {
     api.openPortal = vi.fn(async () => {
       throw new Error("Error invoking remote method 'agent:open': Error: No se pudo abrir el portal: x");
     });
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     await act(async () => {
       fireEvent.click(screen.getByText('Iniciar agente'));
     });
@@ -104,7 +105,7 @@ describe('AgentPanel', () => {
 
   it('«Iniciar agente» y un rechazo muestran el error limpio', async () => {
     (api.start as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Error invoking remote method 'agent:start': Error: Ya hay una ejecución en curso."));
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Iniciar agente' }));
     });
@@ -115,7 +116,7 @@ describe('AgentPanel', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
       () => ({ x: 10, y: 100, width: 300, height: 200, top: 100, left: 10, right: 310, bottom: 300, toJSON() {} }) as DOMRect,
     );
-    const { rerender } = render(<AgentPanel visible />);
+    const { rerender } = render(<AgentPanel visible caseId={CASE} />);
     expect(api.setVisible).toHaveBeenLastCalledWith(true);
     const setBounds = api.setBounds as ReturnType<typeof vi.fn>;
     const setVisible = api.setVisible as ReturnType<typeof vi.fn>;
@@ -126,7 +127,7 @@ describe('AgentPanel', () => {
     expect(setBounds).not.toHaveBeenCalled();
     emit({ type: 'log', at: 'x', text: 'Paso 2/5: Einkünfte' });
     expect(setBounds).not.toHaveBeenCalled();
-    rerender(<AgentPanel visible />);
+    rerender(<AgentPanel visible caseId={CASE} />);
     expect(setBounds).toHaveBeenLastCalledWith({ x: 10, y: 100, width: 300, height: 200 });
     expect(setVisible).toHaveBeenLastCalledWith(true);
     // Primero los límites, luego mostrar.
@@ -135,7 +136,7 @@ describe('AgentPanel', () => {
   });
 
   it('la línea de estado muestra «Paso n/total» mientras rellena, o «Paso n» sin total', () => {
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     emit({ type: 'state', state: 'rellenando', step: 2, total: 5 });
     expect(screen.getByText(/Agente: Rellenando · Paso 2\/5/)).toBeTruthy();
     emit({ type: 'state', state: 'rellenando', step: 3 });
@@ -147,7 +148,7 @@ describe('AgentPanel', () => {
   it('un nuevo inicio borra el estado de la ejecución anterior', async () => {
     let release!: () => void;
     (api.start as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     emit({ type: 'state', state: 'error', message: '«Weiter» no es visible o está tapado' });
     expect(screen.getByText(/Agente: Error — «Weiter»/)).toBeTruthy();
     await act(async () => {
@@ -159,7 +160,7 @@ describe('AgentPanel', () => {
   });
 
   it('distribución fija: controles arriba; registro y pendientes en su propio panel desplazable, fuera del hueco', () => {
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     emit({ type: 'log', at: 'x', text: 'Observando el paso actual' });
     const pending = [pend(2, 'Ingresos', 'Bonus', 'sin_dato')];
     emit({ type: 'finished', results: pending, pending, blockedSubmits: 0 } as never);
@@ -175,7 +176,7 @@ describe('AgentPanel', () => {
   });
 
   it('«No quedan pendientes» solo tras una entrega, no tras detener', () => {
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     emit({ type: 'state', state: 'detenido' });
     emit({ type: 'finished', results: [], pending: [], blockedSubmits: 0 } as never);
     expect(screen.queryByText('No quedan pendientes.')).toBeNull();
@@ -189,11 +190,35 @@ describe('AgentPanel', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
       () => ({ x: 10, y: top, width: 300, height: 200, top, left: 10, right: 310, bottom: top + 200, toJSON() {} }) as DOMRect,
     );
-    render(<AgentPanel visible />);
+    render(<AgentPanel visible caseId={CASE} />);
     expect(api.setBounds).toHaveBeenLastCalledWith({ x: 10, y: 100, width: 300, height: 200 });
     top = 160;
     emit({ type: 'model', status: 'error', message: 'fallo' });
     expect(api.setBounds).toHaveBeenLastCalledWith({ x: 10, y: 160, width: 300, height: 200 });
     vi.restoreAllMocks();
+  });
+  it('sin caseId, Iniciar muestra el mensaje de no_approval y no inicia', async () => {
+    render(<AgentPanel visible />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Iniciar agente' }));
+    });
+    expect(screen.getByRole('alert').textContent).toBe('No hay ninguna versión aprobada del expediente. Revísalo y apruébalo antes de rellenar el portal.');
+    expect(api.start).not.toHaveBeenCalled();
+  });
+
+  it('con caseId, Iniciar llama a start(caseId)', async () => {
+    render(<AgentPanel visible caseId={CASE} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Iniciar agente' }));
+    });
+    expect(api.start).toHaveBeenCalledWith(CASE);
+  });
+
+  it('muestra la huella abreviada al recibir declaration', () => {
+    render(<AgentPanel visible caseId={CASE} />);
+    emit({ type: 'declaration', caseId: CASE, caseRevision: 7, approvedAt: '2026-11-12T10:00:00.000Z', contentHash: 'abcdef0123456789'.repeat(4) });
+    const t = screen.getByText(/^Expediente · revisión 7 · /).textContent!;
+    expect(t).toContain('abcdef012345');
+    expect(t).not.toContain('abcdef0123456');
   });
 });

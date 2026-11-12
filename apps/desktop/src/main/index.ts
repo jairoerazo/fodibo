@@ -1,12 +1,15 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
-import { readFileSync } from 'node:fs';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadDeclaration } from '../core/agent/index.js';
+import { ExpedienteError, ExpedienteService } from '../core/expediente/index.js';
 import { TransferService } from '../core/transfer/index.js';
+import { registerDocProtocol } from './doc-protocol.js';
+import { registerExpedienteIpc, type ExpedienteFacade } from './expediente-ipc.js';
 import { registerIpc } from './ipc.js';
 import { startAdapterSelftest, startBench } from './portal/bench-main.js';
 import { AGENT_CHANNELS } from '../shared/agent-ipc.js';
-import { AgentController, createLlamaFromEnv, errMsg, registerAgentIpc, type LlamaLike } from './portal/agent-ipc.js';
+import { CASE_CHANNELS } from '../shared/expediente-ipc.js';
+import { AgentController, APPROVAL_MESSAGES, createLlamaFromEnv, errMsg, registerAgentIpc, type LlamaLike } from './portal/agent-ipc.js';
 import { CdpAdapter } from './portal/cdp-adapter.js';
 import { createPortalSession, portalRoot, registerPortalScheme } from './portal/protocol.js';
 import { PortalView } from './portal/view.js';
@@ -17,8 +20,11 @@ registerPortalScheme();
 let win: BrowserWindow | undefined;
 const selftest = process.argv.includes('--selftest-adapter');
 const bench = process.argv.includes('--bench');
-const service = new TransferService({ dataDir: app.getPath('userData'), log: (m) => console.log(`[fodibo] ${m}`) });
+const dataDir = process.env['FODIBO_DATA_DIR'] || app.getPath('userData');
+const service = new TransferService({ dataDir, log: (m) => console.log(`[fodibo] ${m}`) });
 
+/** `undefined` si el expediente no pudo abrirse (el IPC `case:*` responde `storage_error`). */
+let expediente: ExpedienteService | undefined;
 let llama: LlamaLike | undefined;
 const agent = new AgentController({
   createView: () => {
@@ -27,11 +33,16 @@ const agent = new AgentController({
     return { view, adapter: new CdpAdapter(view.webContents) };
   },
   getLlama: () => (llama ??= createLlamaFromEnv()),
-  loadDeclaration: () => {
+  loadDeclaration: (caseId) => {
+    if (!expediente) throw new Error(APPROVAL_MESSAGES.no_approval);
     try {
-      return loadDeclaration(JSON.parse(readFileSync(join(portalRoot(), 'declaracion.json'), 'utf8')));
+      const { declaration, approvalId: _id, ...approval } = expediente.approvedDeclaration(caseId);
+      return { declaration, approval: { caseId, ...approval } };
     } catch (err) {
-      throw new Error(`No se pudo leer la declaración: ${errMsg(err)}`);
+      if (err instanceof ExpedienteError && err.code in APPROVAL_MESSAGES) {
+        throw new Error(APPROVAL_MESSAGES[err.code as keyof typeof APPROVAL_MESSAGES]);
+      }
+      throw new Error('No se pudo leer la versión aprobada del expediente.');
     }
   },
   emit: (e) => {
@@ -66,6 +77,59 @@ function createWindow(): void {
   else void win.loadFile(join(import.meta.dirname, '../renderer/index.html'));
 }
 
+/** Ruta de la copia más reciente de `backups/`, si existe (el nombre lleva versión y marca de tiempo). */
+function latestBackup(): string | undefined {
+  try {
+    const dir = join(dataDir, 'expediente', 'backups');
+    const last = readdirSync(dir)
+      .filter((f) => f.endsWith('.db'))
+      .sort()
+      .at(-1);
+    return last ? join(dir, last) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Fachada para cuando el almacén no abrió: todo responde `storage_error` con la copia disponible. */
+function brokenExpediente(backup: string | undefined): ExpedienteFacade {
+  const fail = (): never => {
+    throw new ExpedienteError('storage_error', 'No se pudo abrir el expediente.', backup ? { backup } : {});
+  };
+  return {
+    listCases: fail,
+    createCase: fail,
+    updateCase: fail,
+    getCase: fail,
+    listConcepts: fail,
+    listImportable: fail,
+    importPackage: fail,
+    setDocument: fail,
+    saveField: fail,
+    deleteField: fail,
+    fieldHistory: fail,
+    approve: fail,
+    documentLocation: fail,
+    on: () => () => {},
+  };
+}
+
+async function openExpediente(): Promise<void> {
+  try {
+    expediente = await ExpedienteService.open({ dataDir, inboxDir: join(dataDir, 'inbox') });
+    expediente.on((e) => {
+      if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(CASE_CHANNELS.event, e);
+      agent.onCaseChanged(e.caseId);
+    });
+    registerDocProtocol(session.defaultSession, expediente);
+    registerExpedienteIpc(ipcMain, expediente, { showItemInFolder: (p) => shell.showItemInFolder(p) });
+  } catch {
+    // Sin rutas ni mensajes del error en la consola: solo el código.
+    console.error('[fodibo] expediente: storage_error');
+    registerExpedienteIpc(ipcMain, brokenExpediente(latestBackup()), { showItemInFolder: () => {} });
+  }
+}
+
 let quitting = false;
 async function shutdown(): Promise<void> {
   if (quitting) return;
@@ -73,12 +137,22 @@ async function shutdown(): Promise<void> {
   try {
     await agent.dispose().catch((err: unknown) => console.error(`[fodibo] ${errMsg(err)}`));
     await service.stop();
+    expediente?.close();
   } finally {
     app.quit();
   }
 }
 
 function startApp(): void {
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+    return;
+  }
+  app.on('second-instance', () => {
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  });
   registerIpc(service, () => win);
   registerAgentIpc(ipcMain, agent);
 
@@ -91,7 +165,8 @@ function startApp(): void {
     void shutdown();
   });
 
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
+    await openExpediente();
     createWindow();
     app.on('activate', () => {
       if (!win && !quitting) createWindow();

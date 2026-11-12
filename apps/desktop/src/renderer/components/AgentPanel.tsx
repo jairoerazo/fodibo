@@ -38,7 +38,11 @@ function groupByStep(pending: FieldResult[]): { step: number; title: string; ite
   return [...groups.values()].sort((a, b) => a.step - b.step);
 }
 
-export function AgentPanel({ visible }: { visible: boolean }) {
+// Mismo texto que `APPROVAL_MESSAGES.no_approval` (el renderer no importa el proceso principal).
+const MSG_NO_APPROVAL = 'No hay ninguna versión aprobada del expediente. Revísalo y apruébalo antes de rellenar el portal.';
+
+export function AgentPanel({ visible, caseId }: { visible: boolean; caseId?: string }) {
+  const [approval, setApproval] = useState<{ caseRevision: number; approvedAt: string; contentHash: string }>();
   const [modelStatus, setModelStatus] = useState<keyof typeof MODEL_TEXT>();
   const [agentState, setAgentState] = useState<AgentState>('inactivo');
   const [stateMessage, setStateMessage] = useState<string>();
@@ -62,6 +66,8 @@ export function AgentPanel({ visible }: { visible: boolean }) {
           setAgentState(e.state);
           setStateMessage(e.message);
           setStep(e.state === 'rellenando' && e.step !== undefined ? { n: e.step, ...(e.total !== undefined ? { total: e.total } : {}) } : undefined);
+        } else if (e.type === 'declaration') {
+          setApproval({ caseRevision: e.caseRevision, approvedAt: e.approvedAt, contentHash: e.contentHash });
         } else if (e.type === 'log') {
           setLog((prev) => [...prev, { at: e.at, text: e.text }]);
         } else if (e.type === 'finished') {
@@ -119,6 +125,11 @@ export function AgentPanel({ visible }: { visible: boolean }) {
 
   const start = async () => {
     setError(undefined);
+    if (!caseId) {
+      setError(MSG_NO_APPROVAL);
+      return;
+    }
+    setApproval(undefined);
     setPending(undefined);
     setLog([]);
     // El estado de la ejecución anterior (p. ej. un error) no debe verse como el de la nueva.
@@ -130,7 +141,7 @@ export function AgentPanel({ visible }: { visible: boolean }) {
       // Abre el portal si aún no lo está (en el proceso principal es idempotente).
       await window.fodiboAgent.openPortal();
       setPortalOpen(true);
-      await window.fodiboAgent.start();
+      await window.fodiboAgent.start(caseId);
     } catch (err) {
       setError(cleanIpcError(err));
     }
@@ -162,6 +173,11 @@ export function AgentPanel({ visible }: { visible: boolean }) {
           {stepText}
           {stateMessage ? ` — ${stateMessage}` : ''}
         </p>
+        {approval && (
+          <p className="status">
+            Expediente · revisión {approval.caseRevision} · {approval.approvedAt.slice(0, 10)} · {approval.contentHash.slice(0, 12)}
+          </p>
+        )}
         {error && (
           <p role="alert" className="error">
             {error}

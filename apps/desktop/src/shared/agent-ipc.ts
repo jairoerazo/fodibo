@@ -12,7 +12,9 @@ export const AGENT_CHANNELS = {
 
 export type AgentUiEvent =
   | AgentEvent
-  | { type: 'model'; status: 'arrancando' | 'listo' | 'error'; message?: string };
+  | { type: 'model'; status: 'arrancando' | 'listo' | 'error'; message?: string }
+  /** Versión aprobada con la que se rellena el portal; se emite justo después de cargarla. */
+  | { type: 'declaration'; caseId: string; caseRevision: number; approvedAt: string; contentHash: string };
 
 export interface AgentBounds {
   x: number;
@@ -24,7 +26,8 @@ export interface AgentBounds {
 export interface AgentApi {
   openPortal(): Promise<void>;
   closePortal(): Promise<void>;
-  start(): Promise<void>;
+  /** Rellena el portal con la versión aprobada del expediente `caseId`. */
+  start(caseId: string): Promise<void>;
   stop(): Promise<void>;
   setBounds(r: AgentBounds): void;
   /** Muestra u oculta la vista del portal sin cambiar su tamaño (sigue funcionando oculta). */

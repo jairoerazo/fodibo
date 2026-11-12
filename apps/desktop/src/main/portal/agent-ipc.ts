@@ -24,12 +24,30 @@ export interface LlamaLike {
   stop(): Promise<void>;
 }
 
+export interface ApprovalInfo {
+  caseId: string;
+  caseRevision: number;
+  approvedAt: string;
+  contentHash: string;
+}
+
+/** Mensajes (§11) cuando no se puede usar la versión aprobada; los muestra el panel tal cual. */
+export const APPROVAL_MESSAGES = {
+  no_approval: 'No hay ninguna versión aprobada del expediente. Revísalo y apruébalo antes de rellenar el portal.',
+  approval_stale: 'El expediente cambió después de la aprobación. Vuelve a aprobarlo.',
+  approval_corrupt: 'La versión aprobada no supera la comprobación de integridad.',
+  not_found: 'No hay ninguna versión aprobada del expediente. Revísalo y apruébalo antes de rellenar el portal.',
+} as const;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 export interface AgentDeps {
   /** Crea la vista del portal; `undefined` si no hay ventana. */
   createView(): { view: ViewLike; adapter: AdapterLike } | undefined;
   getLlama(): LlamaLike;
   createModel?: (baseUrl: string) => ModelClient;
-  loadDeclaration(): Declaration;
+  /** Lanza un `Error` con un mensaje legible si no hay una versión aprobada vigente. */
+  loadDeclaration(caseId: string): { declaration: Declaration; approval?: ApprovalInfo };
   emit(e: AgentUiEvent): void;
 }
 
@@ -48,6 +66,8 @@ export class AgentController {
   private running?: Promise<void>;
   private stopRequested = false;
   private startingModel = false;
+  /** Expediente de la ejecución en curso. */
+  private runningCaseId?: string;
 
   constructor(private readonly deps: AgentDeps) {}
 
@@ -116,24 +136,35 @@ export class AgentController {
     if (this.startingModel) void this.deps.getLlama().stop().catch(() => {});
   }
 
+  /** El expediente cambió: si el agente rellena con él, la versión aprobada ya no es la vigente. */
+  onCaseChanged(caseId: string): void {
+    if (!this.running || this.runningCaseId !== caseId) return;
+    this.deps.emit({ type: 'log', at: new Date().toISOString(), text: 'El expediente cambió: llenado detenido' });
+    this.stop();
+  }
+
   /** Resuelve cuando termina la ejecución. Rechaza con un mensaje legible si no pudo empezar. */
-  start(): Promise<void> {
+  start(caseId: string): Promise<void> {
     if (this.running) return Promise.reject(new Error('Ya hay una ejecución en curso.'));
     if (!this.current) return Promise.reject(new Error('Abre el portal antes de iniciar el agente.'));
     this.stopRequested = false;
-    const p = this.execute(this.current).finally(() => {
+    this.runningCaseId = caseId;
+    const p = this.execute(this.current, caseId).finally(() => {
       this.running = undefined;
+      this.runningCaseId = undefined;
       this.orchestrator = undefined;
     });
     this.running = p.catch(() => {});
     return p;
   }
 
-  private async execute(cur: { view: ViewLike; adapter: AdapterLike }): Promise<void> {
+  private async execute(cur: { view: ViewLike; adapter: AdapterLike }, caseId: string): Promise<void> {
     const { emit } = this.deps;
     let declaration: Declaration;
     try {
-      declaration = this.deps.loadDeclaration();
+      const loaded = this.deps.loadDeclaration(caseId);
+      declaration = loaded.declaration;
+      if (loaded.approval) emit({ type: 'declaration', ...loaded.approval });
     } catch (err) {
       // Es un fallo del agente (datos de entrada), no del modelo.
       const message = errMsg(err);
@@ -220,7 +251,11 @@ interface IpcMainLike {
 export function registerAgentIpc(ipc: IpcMainLike, controller: AgentController): () => void {
   ipc.handle(AGENT_CHANNELS.open, () => controller.openPortal());
   ipc.handle(AGENT_CHANNELS.close, () => controller.closePortal());
-  ipc.handle(AGENT_CHANNELS.start, () => controller.start());
+  ipc.handle(AGENT_CHANNELS.start, (_e, caseId) => {
+    // El renderer no es de confianza: solo se admite un UUID en minúsculas.
+    if (typeof caseId !== 'string' || !UUID_RE.test(caseId)) return Promise.reject(new Error(APPROVAL_MESSAGES.no_approval));
+    return controller.start(caseId);
+  });
   ipc.handle(AGENT_CHANNELS.stop, () => controller.stop());
   ipc.on(AGENT_CHANNELS.bounds, (_e, r) => {
     try {
