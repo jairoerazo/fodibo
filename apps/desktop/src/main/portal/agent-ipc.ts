@@ -1,5 +1,6 @@
 // Controlador del agente en el proceso principal. No importa `electron` en tiempo de ejecución
 // (recibe `ipcMain` y las fábricas por inyección) para poder probarse en Node.
+import { ExpedienteError } from '../../core/expediente/index.js';
 import { AgentOrchestrator, createLlamaClient } from '../../core/agent/index.js';
 import type { AgentEvent, Declaration, ModelClient, PortalAdapter } from '../../core/agent/index.js';
 import { AGENT_CHANNELS, type AgentBounds, type AgentUiEvent } from '../../shared/agent-ipc.js';
@@ -38,6 +39,12 @@ export const APPROVAL_MESSAGES = {
   approval_corrupt: 'La versión aprobada no supera la comprobación de integridad.',
   not_found: 'No hay ninguna versión aprobada del expediente. Revísalo y apruébalo antes de rellenar el portal.',
 } as const;
+
+/** Mensaje legible de un fallo al cargar la versión aprobada; los errores ajenos al expediente conservan el suyo. */
+export function approvalMessage(err: unknown): string {
+  if (err instanceof ExpedienteError && err.code in APPROVAL_MESSAGES) return APPROVAL_MESSAGES[err.code as keyof typeof APPROVAL_MESSAGES];
+  return errMsg(err);
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -167,7 +174,7 @@ export class AgentController {
       if (loaded.approval) emit({ type: 'declaration', ...loaded.approval });
     } catch (err) {
       // Es un fallo del agente (datos de entrada), no del modelo.
-      const message = errMsg(err);
+      const message = approvalMessage(err);
       emit({ type: 'state', state: 'error', message });
       throw new Error(message);
     }

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
-import { readdirSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { ExpedienteError, ExpedienteService } from '../core/expediente/index.js';
 import { TransferService } from '../core/transfer/index.js';
@@ -35,13 +35,12 @@ const agent = new AgentController({
   getLlama: () => (llama ??= createLlamaFromEnv()),
   loadDeclaration: (caseId) => {
     if (!expediente) throw new Error(APPROVAL_MESSAGES.no_approval);
+    // Un ExpedienteError viaja tal cual: el controlador lo traduce a APPROVAL_MESSAGES.
     try {
       const { declaration, approvalId: _id, ...approval } = expediente.approvedDeclaration(caseId);
       return { declaration, approval: { caseId, ...approval } };
     } catch (err) {
-      if (err instanceof ExpedienteError && err.code in APPROVAL_MESSAGES) {
-        throw new Error(APPROVAL_MESSAGES[err.code as keyof typeof APPROVAL_MESSAGES]);
-      }
+      if (err instanceof ExpedienteError) throw err;
       throw new Error('No se pudo leer la versión aprobada del expediente.');
     }
   },
@@ -77,15 +76,16 @@ function createWindow(): void {
   else void win.loadFile(join(import.meta.dirname, '../renderer/index.html'));
 }
 
-/** Ruta de la copia más reciente de `backups/`, si existe (el nombre lleva versión y marca de tiempo). */
+/** Ruta de la copia más reciente de `backups/`, si existe (por fecha de modificación). */
 function latestBackup(): string | undefined {
   try {
     const dir = join(dataDir, 'expediente', 'backups');
     const last = readdirSync(dir)
       .filter((f) => f.endsWith('.db'))
-      .sort()
+      .map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs }))
+      .sort((a, b) => a.t - b.t || a.f.localeCompare(b.f))
       .at(-1);
-    return last ? join(dir, last) : undefined;
+    return last ? join(dir, last.f) : undefined;
   } catch {
     return undefined;
   }
@@ -115,19 +115,24 @@ function brokenExpediente(backup: string | undefined): ExpedienteFacade {
 }
 
 async function openExpediente(): Promise<void> {
+  let opened: ExpedienteService | undefined;
   try {
-    expediente = await ExpedienteService.open({ dataDir, inboxDir: join(dataDir, 'inbox') });
-    expediente.on((e) => {
-      if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(CASE_CHANNELS.event, e);
-      agent.onCaseChanged(e.caseId);
-    });
-    registerDocProtocol(session.defaultSession, expediente);
-    registerExpedienteIpc(ipcMain, expediente, { showItemInFolder: (p) => shell.showItemInFolder(p) });
-  } catch {
-    // Sin rutas ni mensajes del error en la consola: solo el código.
-    console.error('[fodibo] expediente: storage_error');
-    registerExpedienteIpc(ipcMain, brokenExpediente(latestBackup()), { showItemInFolder: () => {} });
+    opened = await ExpedienteService.open({ dataDir, inboxDir: join(dataDir, 'inbox') });
+  } catch (err) {
+    // Solo el código: ni mensajes ni rutas llegan a la consola.
+    console.error(`[fodibo] expediente: ${err instanceof ExpedienteError ? err.code : 'open_failed'}`);
   }
+  if (!opened) {
+    registerExpedienteIpc(ipcMain, brokenExpediente(latestBackup()), { showItemInFolder: () => {} });
+    return;
+  }
+  expediente = opened;
+  opened.on((e) => {
+    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(CASE_CHANNELS.event, e);
+    agent.onCaseChanged(e.caseId);
+  });
+  registerDocProtocol(session.defaultSession, opened);
+  registerExpedienteIpc(ipcMain, opened, { showItemInFolder: (p) => shell.showItemInFolder(p) });
 }
 
 let quitting = false;
@@ -137,8 +142,12 @@ async function shutdown(): Promise<void> {
   try {
     await agent.dispose().catch((err: unknown) => console.error(`[fodibo] ${errMsg(err)}`));
     await service.stop();
-    expediente?.close();
   } finally {
+    try {
+      expediente?.close();
+    } catch {
+      // ya cerrado
+    }
     app.quit();
   }
 }
@@ -166,7 +175,11 @@ function startApp(): void {
   });
 
   void app.whenReady().then(async () => {
-    await openExpediente();
+    try {
+      await openExpediente();
+    } catch {
+      console.error('[fodibo] expediente: registro_fallido');
+    }
     createWindow();
     app.on('activate', () => {
       if (!win && !quitting) createWindow();

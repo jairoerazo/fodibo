@@ -274,7 +274,12 @@ describe('AgentController', () => {
     expect(kinds.indexOf('declaration')).toBeLessThan(kinds.indexOf('model'));
   });
 
-  it('sin aprobación no arranca: estado error con el texto exacto, sin llama ni attach', async () => {
+  it.each([
+    ['no_approval', 'No hay ninguna versión aprobada del expediente. Revísalo y apruébalo antes de rellenar el portal.'],
+    ['approval_stale', 'El expediente cambió después de la aprobación. Vuelve a aprobarlo.'],
+    ['approval_corrupt', 'La versión aprobada no supera la comprobación de integridad.'],
+    ['not_found', 'No hay ninguna versión aprobada del expediente. Revísalo y apruébalo antes de rellenar el portal.'],
+  ] as const)('%s: no arranca, estado error con el texto exacto, sin llama ni attach', async (code, text) => {
     let llamaStarted = false;
     const { c, events, calls } = setup({
       llamaStart: async () => {
@@ -282,24 +287,16 @@ describe('AgentController', () => {
         return 'http://127.0.0.1:1';
       },
       loadDeclaration: () => {
-        throw new Error(APPROVAL_MESSAGES.no_approval);
+        throw new ExpedienteError(code, 'mensaje interno que no debe llegar al usuario');
       },
     });
     await c.openPortal();
-    await expect(c.start(CASE)).rejects.toThrow(APPROVAL_MESSAGES.no_approval);
-    expect(events).toContainEqual({
-      type: 'state',
-      state: 'error',
-      message: 'No hay ninguna versión aprobada del expediente. Revísalo y apruébalo antes de rellenar el portal.',
-    });
+    await expect(c.start(CASE)).rejects.toThrow(text);
+    expect(events).toContainEqual({ type: 'state', state: 'error', message: text });
+    expect(events.some((e) => e.type === 'model' || e.type === 'declaration')).toBe(false);
     expect(llamaStarted).toBe(false);
     expect(calls).not.toContain('attach');
-  });
-
-  it('textos exactos de approval_stale, approval_corrupt y not_found', () => {
-    expect(APPROVAL_MESSAGES.approval_stale).toBe('El expediente cambió después de la aprobación. Vuelve a aprobarlo.');
-    expect(APPROVAL_MESSAGES.approval_corrupt).toBe('La versión aprobada no supera la comprobación de integridad.');
-    expect(APPROVAL_MESSAGES.not_found).toBe(APPROVAL_MESSAGES.no_approval);
+    expect(c.isRunning).toBe(false);
   });
 
   it('onCaseChanged del mismo expediente detiene la ejecución con el log exacto; otro expediente no', async () => {
