@@ -81,8 +81,8 @@ export class ExpedienteService {
   private queue: Promise<unknown> = Promise.resolve();
 
   private constructor(
-    readonly store: CaseStore,
-    readonly blobs: BlobStore,
+    protected readonly store: CaseStore,
+    protected readonly blobs: BlobStore,
     readonly inboxDir: string,
     readonly now: () => Date,
     readonly concepts: readonly Concept[],
