@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ReceivedPackage } from '../core/transfer/index.js';
 import { AgentPanel } from './components/AgentPanel.js';
+import { ExpedienteTab } from './components/expediente/ExpedienteTab.js';
 import { PackageList } from './components/PackageList.js';
 import { QrPanel } from './components/QrPanel.js';
 import { cleanIpcError } from './format.js';
@@ -17,11 +18,36 @@ const CLOSED_NOTICE = {
   inactive: 'Se cerró la sesión por inactividad.',
 } as const;
 
+const CASE_KEY = 'fodibo.activeCaseId';
+
+function readStoredCase(): string | undefined {
+  try {
+    return localStorage.getItem(CASE_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function App() {
   const [view, setView] = useState<View>({ kind: 'idle' });
   const [packages, setPackages] = useState<ReceivedPackage[]>([]);
   const [error, setError] = useState<string>();
-  const [tab, setTab] = useState<'recibir' | 'portal'>('recibir');
+  const [tab, setTab] = useState<'recibir' | 'expediente' | 'portal'>('recibir');
+  const [activeCaseId, setActiveCaseId] = useState<string | undefined>(readStoredCase);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string>();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [notice, setNotice] = useState<string>();
+
+  const selectCase = useCallback((id: string | undefined) => {
+    setActiveCaseId(id);
+    setSelectedDocumentId(undefined);
+    try {
+      if (id) localStorage.setItem(CASE_KEY, id);
+      else localStorage.removeItem(CASE_KEY);
+    } catch {
+      // Sin almacenamiento disponible: el expediente activo simplemente no se recuerda.
+    }
+  }, []);
 
   useEffect(() => {
     const off = window.fodibo.onEvent((e) => {
@@ -68,24 +94,55 @@ export function App() {
     window.fodibo.openPackage(id).catch((err: unknown) => setError(cleanIpcError(err)));
   }, []);
 
+  const importToCase = useCallback(
+    async (packageId: string) => {
+      if (!activeCaseId) return;
+      setNotice(undefined);
+      const r = await window.fodiboExpediente.importPackage(activeCaseId, packageId);
+      if (!r.ok) return setError(r.error.message);
+      setError(undefined);
+      const fresh = r.value.documents.filter((d) => d.outcome === 'nuevo').length;
+      setNotice(r.value.status === 'already_imported' ? 'Este paquete ya estaba importado.' : `Paquete importado: ${fresh} documento(s) nuevo(s).`);
+      setRefreshKey((k) => k + 1);
+      window.fodibo
+        .listReceived()
+        .then((list) => setPackages((prev) => [...prev.filter((p) => list.some((q) => q.receipt.package_id === p.receipt.package_id)), ...list.filter((q) => !prev.some((p) => p.receipt.package_id === q.receipt.package_id))]))
+        .catch((err: unknown) => setError(cleanIpcError(err)));
+    },
+    [activeCaseId],
+  );
+
   return (
-    <main className={tab === 'portal' ? 'wide' : undefined}>
+    <main className={tab === 'recibir' ? undefined : 'wide'}>
       <h1>FODIBO</h1>
       <nav className="tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === 'recibir'} onClick={() => setTab('recibir')}>
           Recibir del móvil
         </button>
+        <button type="button" role="tab" aria-selected={tab === 'expediente'} onClick={() => setTab('expediente')}>
+          Expediente
+        </button>
         <button type="button" role="tab" aria-selected={tab === 'portal'} onClick={() => setTab('portal')}>
           Prueba de portal
         </button>
       </nav>
-      <AgentPanel visible={tab === 'portal'} />
+      <div hidden={tab !== 'expediente'} className="tab-body">
+        <ExpedienteTab
+          caseId={activeCaseId}
+          onSelectCase={selectCase}
+          selectedDocumentId={selectedDocumentId}
+          onSelectDocument={setSelectedDocumentId}
+          refreshKey={refreshKey}
+        />
+      </div>
+      <AgentPanel visible={tab === 'portal'} caseId={activeCaseId} />
       <div hidden={tab !== 'recibir'} className="tab-body">
       {error && (
         <p role="alert" className="error">
           {error}
         </p>
       )}
+      {notice && <p role="status">{notice}</p>}
       {view.kind === 'idle' && (
         <div className="panel">
           {view.notice && <p>{view.notice}</p>}
@@ -109,7 +166,12 @@ export function App() {
         </div>
       )}
       <h2>Paquetes recibidos</h2>
-      <PackageList packages={packages} onOpen={open} />
+      <PackageList
+        packages={packages}
+        onOpen={open}
+        onImport={(id) => void importToCase(id)}
+        importHint={activeCaseId ? undefined : 'Selecciona o crea un expediente en la pestaña Expediente.'}
+      />
       </div>
     </main>
   );

@@ -1,7 +1,19 @@
 import type { ReceivedPackage } from '../../core/transfer/index.js';
 import { formatSize } from '../format.js';
 
-export function PackageCard({ pkg, onOpen }: { pkg: ReceivedPackage; onOpen: (packageId: string) => void }) {
+export function PackageCard({
+  pkg,
+  onOpen,
+  onImport,
+  importHint,
+}: {
+  pkg: ReceivedPackage;
+  onOpen: (packageId: string) => void;
+  /** Si se pasa, se ofrece «Importar al expediente». */
+  onImport?: (packageId: string) => void;
+  /** Motivo por el que no se puede importar (p. ej. no hay expediente activo): deshabilita el botón. */
+  importHint?: string;
+}) {
   const { receipt, deviceName } = pkg;
   return (
     <article className="card">
@@ -23,6 +35,24 @@ export function PackageCard({ pkg, onOpen }: { pkg: ReceivedPackage; onOpen: (pa
       <button type="button" onClick={() => onOpen(receipt.package_id)}>
         Abrir carpeta
       </button>
+      {onImport && (
+        <>
+          {' '}
+          <button
+            type="button"
+            disabled={importHint !== undefined}
+            aria-describedby={importHint ? `import-hint-${receipt.package_id}` : undefined}
+            onClick={() => onImport(receipt.package_id)}
+          >
+            Importar al expediente
+          </button>
+          {importHint && (
+            <small id={`import-hint-${receipt.package_id}`} className="meta">
+              {importHint}
+            </small>
+          )}
+        </>
+      )}
     </article>
   );
 }
