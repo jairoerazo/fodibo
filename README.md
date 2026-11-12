@@ -262,3 +262,41 @@ lsof -nP -iTCP -a -p "$(pgrep -n llama-server)"       # escucha solo en 127.0.0.
 La sesión del portal cancela cualquier petición cuyo esquema no sea `fodibo-portal:`, usa además un proxy
 inexistente (`proxy.invalid:9`) y la vista no permite UDP de WebRTC fuera del proxy (lo verifica
 `selftest:adapter`) y `llama-server` se lanza con `--host 127.0.0.1`.
+
+## Expediente
+
+El escritorio guarda un expediente fiscal por año y cantón: personas, documentos recibidos, campos con su
+historial y evidencias, y una aprobación explícita. Los datos están bajo el directorio de datos (el de
+Electron, o `FODIBO_DATA_DIR` si está definido; la app lo respeta):
+
+```
+<dataDir>/expediente/
+  fodibo.db (+ -wal, -shm)   ← base SQLite
+  blobs/<aa>/<sha256>        ← originales importados, solo lectura
+  blobs/tmp/                 ← temporales de importación
+  backups/                   ← copias de la base
+```
+
+- **Los datos están en claro hasta la ronda de cifrado.** Ni la base ni los blobs están cifrados todavía.
+- **Binding `node:sqlite`.** Viene incluido en Electron 45 y en Node ≥ 22.13: no hay módulo nativo que compilar.
+  Todavía no cumple el criterio de SQLCipher (no admite cifrado), así que en la ronda de cifrado se cambia el
+  binding dentro de `src/core/expediente/storage/`, el único sitio que lo importa. Vitest se ejecuta con
+  `--disable-warning=ExperimentalWarning` para silenciar el aviso de módulo experimental.
+- **`pdfjs-dist` 5.7.284**, fijada en `package.json`. El visor descarga el PDF entero y se lo pasa como datos;
+  no usa wasm ni fuentes o CMaps remotos, así que no sale nada del equipo.
+- **Una sola instancia** de la app a la vez. «Mostrar en la carpeta» abre la copia de `inbox/<id>/originales/`
+  si existe y, si no, el blob.
+- **El agente solo usa la versión aprobada vigente** del expediente. `declaracion.json` solo se lee en
+  `--bench` y `--selftest-adapter`.
+
+### Expediente de prueba
+
+Crea y aprueba un expediente con la declaración de `test-portal/declaracion.json` e imprime su `caseId`
+(el mismo directorio de datos que usa la app si exportas `FODIBO_DATA_DIR`; por defecto `apps/desktop/.dev-data`):
+
+```sh
+FODIBO_DATA_DIR=/tmp/fodibo-datos npm run seed:expediente -w @fodibo/desktop
+```
+
+La proyección aprobada de ese expediente es idéntica a `loadDeclaration(declaracion.json)`; lo comprueba
+`equivalence.test.ts`.

@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { CONCEPTS, normalizeLabel, resolveFromCatalog, type Concept } from '../catalog.js';
-import { parseExpected } from '../bench.js';
+import { portalDeclaration, portalExpectations } from './portal-fields.js';
 import type { Declaration, FieldType, ObservedField, ObservedStep } from '../types.js';
 
 const f = (o: Partial<ObservedField> & Pick<ObservedField, 'field_id' | 'type' | 'label'>): ObservedField => ({
@@ -116,20 +114,8 @@ describe('CONCEPTS', () => {
   });
 
   it('con el portal de prueba resuelve todos los campos como indica esperado.json', () => {
-    const root = new URL('../../../../test-portal/', import.meta.url);
-    const read = (n: string) => JSON.parse(readFileSync(fileURLToPath(new URL(n, root)), 'utf8')) as unknown;
-    const d = read('declaracion.json') as Declaration;
-    const expected = parseExpected(read('esperado.json'));
-    const html = readFileSync(fileURLToPath(new URL('index.html', root)), 'utf8');
-    const re = /<label for="(p(\d)_f\d)">([^<]+)<\/label>\s*<(input|select)([^>]*)>([\s\S]*?)<small/g;
-    const byStep = new Map<number, ObservedField[]>();
-    for (const m of html.matchAll(re)) {
-      const type = /data-type="(\w+)"/.exec(m[5]!)![1] as FieldType;
-      const options = m[4] === 'select' ? [...m[6]!.matchAll(/<option value="([^"]+)">/g)].map((o) => o[1]!) : undefined;
-      const list = byStep.get(Number(m[2])) ?? [];
-      list.push(f({ field_id: m[1]!, type, label: m[3]!, required: /required/.test(m[5]!), ...(options ? { options } : {}) }));
-      byStep.set(Number(m[2]), list);
-    }
+    const d = portalDeclaration();
+    const { expected, byStep } = portalExpectations();
     let checked = 0;
     for (const [n, fields] of byStep) {
       const r = resolveFromCatalog({ ...step(fields), index: n }, d);
