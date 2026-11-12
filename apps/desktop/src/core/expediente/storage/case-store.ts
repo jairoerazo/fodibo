@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ExpedienteError } from '../errors.js';
@@ -15,7 +15,7 @@ export type OpenStoreOptions = {
 };
 
 export interface CaseStore {
-  /** Ejecuta `fn` en una transacción síncrona (BEGIN IMMEDIATE); revierte si lanza. */
+  /** Ejecuta `fn` en una transacción síncrona (BEGIN IMMEDIATE); revierte si lanza. No anida: una llamada dentro de `fn` falla con storage_error. */
   transaction<T>(fn: () => T): T;
   insertCase(row: CaseRow): void;
   getCase(caseId: string): CaseRow | undefined;
@@ -52,7 +52,7 @@ function migrate(db: DatabaseSync, dir: string, migrations: Migration[], now: ()
         db.exec(`PRAGMA user_version = ${m.version}`);
         db.exec('COMMIT');
       } catch (e) {
-        db.exec('ROLLBACK');
+        rollback(db);
         throw e;
       }
     } catch {
@@ -61,33 +61,56 @@ function migrate(db: DatabaseSync, dir: string, migrations: Migration[], now: ()
   }
 }
 
+/** SQLite puede haber revertido ya por su cuenta (disco lleno, E/S): entonces no hay nada que revertir. */
+function rollback(db: DatabaseSync): void {
+  if (!db.isTransaction) return;
+  try {
+    db.exec('ROLLBACK');
+  } catch {
+    /* se conserva el error original */
+  }
+}
+
 export function openStore(opts: OpenStoreOptions): CaseStore {
   const now = opts.now ?? (() => new Date());
   const migrations = opts.migrations ?? MIGRATIONS;
   const latest = migrations.reduce((max, m) => Math.max(max, m.version), 0);
 
-  let db: DatabaseSync;
+  const file = join(opts.dir, DB_FILE);
   try {
     mkdirSync(opts.dir, { recursive: true });
-    db = new DatabaseSync(join(opts.dir, DB_FILE));
   } catch {
     throw storageError('No se puede abrir la base del expediente.');
   }
-  try {
-    // Las comprobaciones de solo lectura van antes de los pragmas: una base de versión posterior no se toca.
-    let integrity: string;
+
+  // Comprobaciones previas en una conexión de solo lectura: cerrar una conexión de escritura sobre una base WAL
+  // con -wal caliente la checkpointea y borra -wal/-shm, es decir, modifica una base que no debemos tocar.
+  if (existsSync(file)) {
+    let probe: DatabaseSync | undefined;
     let version: number;
+    let integrity: string;
     try {
-      version = userVersion(db);
-      integrity = (db.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check;
+      probe = new DatabaseSync(file, { readOnly: true });
+      version = userVersion(probe);
+      integrity = (probe.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check;
     } catch {
       throw storageError('La base del expediente es ilegible.');
+    } finally {
+      probe?.close();
     }
     if (version > latest) {
       throw storageError(`La base del expediente es de una versión posterior (${version}) a la que conoce esta aplicación (${latest}).`);
     }
     if (integrity !== 'ok') throw storageError('La comprobación de integridad de la base del expediente ha fallado.');
+  }
 
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(file);
+  } catch {
+    throw storageError('No se puede abrir la base del expediente.');
+  }
+  try {
     db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA synchronous = FULL');
     db.exec('PRAGMA foreign_keys = ON');
@@ -114,13 +137,13 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
       try {
         result = fn();
       } catch (e) {
-        conn.exec('ROLLBACK');
+        rollback(conn);
         throw e;
       }
       try {
         conn.exec('COMMIT');
       } catch {
-        conn.exec('ROLLBACK');
+        rollback(conn);
         throw storageError('No se puede confirmar la transacción.');
       }
       return result;

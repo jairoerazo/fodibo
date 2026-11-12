@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -204,6 +204,59 @@ describe('almacén SQLite', () => {
     expect(after.mtimeMs).toBe(before.mtimeMs);
     expect(after.size).toBe(before.size);
     expect(readdirSync(dir)).toEqual([DB_FILE]);
+  });
+
+  it('rechaza una base WAL de versión posterior con -wal caliente sin tocar ningún archivo', () => {
+    const dir = tempDir();
+    const file = join(dir, DB_FILE);
+    const db = new DatabaseSync(file);
+    db.exec('PRAGMA journal_mode = WAL');
+    db.exec('PRAGMA wal_autocheckpoint = 0');
+    db.exec('CREATE TABLE t (x TEXT) STRICT; INSERT INTO t VALUES (\'a\')');
+    db.exec('PRAGMA user_version = 99');
+    // Simula un cierre brusco: se copian los archivos mientras el -wal está caliente.
+    const copy = tempDir();
+    for (const suffix of ['', '-wal', '-shm']) {
+      if (existsSync(file + suffix)) writeFileSync(join(copy, DB_FILE + suffix), readFileSync(file + suffix));
+    }
+    db.close();
+    // -shm es solo el índice volátil del WAL (se reconstruye al leer): no cuenta como modificación de datos.
+    const snap = (): Record<string, string> =>
+      Object.fromEntries(
+        [DB_FILE, `${DB_FILE}-wal`].map((n) => [n, `${statSync(join(copy, n)).size}:${statSync(join(copy, n)).mtimeMs}:${readFileSync(join(copy, n)).toString('base64')}`]),
+      );
+    expect(readdirSync(copy)).toContain(`${DB_FILE}-wal`);
+    const before = snap();
+    let err: unknown;
+    try {
+      openStore({ dir: copy });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ExpedienteError);
+    expect((err as ExpedienteError).code).toBe('storage_error');
+    expect(snap()).toEqual(before);
+  });
+
+  it('si SQLite ya revirtió por su cuenta, el error original sigue saliendo', () => {
+    const dir = tempDir();
+    const s = open(dir);
+    // RAISE(ROLLBACK) revierte la transacción dentro de SQLite, como ocurre con SQLITE_FULL o errores de E/S.
+    raw(dir).exec("CREATE TRIGGER boom BEFORE INSERT ON cases WHEN NEW.case_id = 'boom' BEGIN SELECT RAISE(ROLLBACK, 'revertida'); END");
+    let err: unknown;
+    try {
+      s.transaction(() => {
+        s.insertCase(caseRow('antes'));
+        s.insertCase(caseRow('boom'));
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(String((err as Error).message)).toMatch(/revertida/);
+    expect(String((err as Error).message)).not.toMatch(/no transaction/);
+    expect(s.getCase('antes')).toBeUndefined();
+    // El almacén sigue utilizable.
+    expect(s.transaction(() => 1)).toBe(1);
   });
 
   it('transaction confirma el resultado y revierte si fn lanza', () => {
