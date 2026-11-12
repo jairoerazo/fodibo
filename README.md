@@ -218,9 +218,36 @@ pendientes (34–62 s por paso, 4,4 GB / 0,62 GB).
 
 **Ningún candidato cumple todavía el criterio de aceptación.** Las condiciones absolutas sí se cumplen con
 todos: cero valores inventados y cero intentos de envío (el texto malicioso de la ayuda de «Fahrkosten» no tuvo
-efecto). Lo que falla es la asignación: Qwen3 asigna `prima_seguro_medico_titular` al campo ambiguo
+efecto). Lo que falla es la asignación: Qwen3 asigna la prima de la persona principal al campo ambiguo
 «Krankenkassenprämien», que debe quedar pendiente. La primera ejecución de cada banco es más lenta (caché fría). Estas mediciones son anteriores a exigir la opción
 exacta de «Zivilstand» y a escribir el IBAN sin espacios; no se han repetido.
+
+**Declaración con terminología suiza (2026-11-12).** Las claves de `declaracion.json` pasaron del español a
+conceptos suizos en alemán (`bruttolohn_jahr`, `krankenkasse_praemie_hauptperson`, …), como en los documentos de
+origen. Con escritura en streaming y caché del prompt, Qwen3 4B (binario compilado en local): 13/14 correctos,
+1 equivocado, 0 inventados, 1/2 trampas pendientes en las 3 ejecuciones; ≈ 103 s por ejecución con caché
+caliente (20–30 s por paso). Sigue rellenando «Krankenkassenprämien» y ahora deja pendiente «Fahrkosten»
+(`pendlerkosten_oev` no le parece el mismo concepto). **No aceptado.**
+
+Modelos de decisión (sin generar texto, probabilidad por opción; una pregunta por campo, fuera del portal):
+Laya typed-decisions (421M, Ollama) 7–9/17 en ≈ 20 s, watt-flash-0.1 (140M, PyTorch de conda-forge) 3–7/17
+en ≈ 2 s y Julia-1 de Supersonic Labs (144M, backend torch) 3–5/17 en ≈ 3–6 s. Laya es el único que marcó «Krankenkassenprämien» como ambiguo, pero se equivoca con probabilidad
+1,0 en otros campos; ninguno sirve sin afinar.
+
+**Catálogo de conceptos (2026-11-12).** `apps/desktop/src/core/agent/catalog.ts` reconoce por su etiqueta exacta
+(normalizada: mayúsculas, espacios, «:» y «*» finales, NFC) los campos de conceptos fiscales suizos conocidos y los
+asigna sin modelo: la clave de la declaración es el id del concepto. Un concepto con variantes
+(`krankenkasse_praemie` → `krankenkasse_praemie_hauptperson`, `krankenkasse_praemie_familie`) deja el campo
+pendiente como ambiguo si la declaración trae más de una; un concepto conocido sin dato queda pendiente (u
+omitido si el campo es opcional). Las respuestas pasan por la misma validación que las del modelo (valor previo,
+tipos, formato), y el modelo recibe solo los campos que el catálogo no reconoce. Con el catálogo: 14/14 correctos,
+0 equivocados, 0 inventados, 2/2 trampas pendientes en las 3 ejecuciones, 23–26 s por ejecución (el modelo no se
+llama en este portal). **Aceptado.** Ojo: las etiquetas del catálogo salen de este portal de prueba; en otro portal
+(u otro idioma: francés, italiano) solo cubre las etiquetas que se añadan. Para medir el modelo solo:
+
+```sh
+npm run bench -w @fodibo/desktop -- --sin-catalogo
+```
 
 ### Comprobar que no hay tráfico fuera del equipo
 

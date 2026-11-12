@@ -7,7 +7,7 @@ const file = new URL('../../../../test-portal/declaracion.json', import.meta.url
 describe('loadDeclaration', () => {
   it('carga la declaración de prueba', () => {
     const decl = loadDeclaration(JSON.parse(readFileSync(file, 'utf8')));
-    expect(decl.numero_avs).toEqual({ tipo: 'text', valor: '756.1234.5678.97' });
+    expect(decl.ahv_nr).toEqual({ tipo: 'text', valor: '756.1234.5678.97' });
     expect(decl.iban.tipo).toBe('iban');
     expect(decl.verpflegungsmehrkosten).toBeUndefined();
   });

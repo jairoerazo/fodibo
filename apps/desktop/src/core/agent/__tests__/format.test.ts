@@ -26,7 +26,7 @@ describe('formatForField', () => {
     expect(formatForField({ tipo: 'boolean', valor: true }, field('checkbox'))).toBe('true');
     expect(formatForField({ tipo: 'boolean', valor: false }, field('checkbox'))).toBe('false');
     expect(formatForField({ tipo: 'text', valor: 'Anna' }, field('text'))).toBe('Anna');
-    expect(formatForField({ tipo: 'enum', valor: 'casado' }, field('select'))).toBe('casado');
+    expect(formatForField({ tipo: 'enum', valor: 'verheiratet' }, field('select'))).toBe('verheiratet');
   });
 });
 

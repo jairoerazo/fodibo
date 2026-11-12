@@ -1,8 +1,9 @@
 // Bancos de pruebas con Electron y la ventana oculta:
 // - `--selftest-adapter`: recorre los 5 pasos con una asignación fija (sin modelo), comprueba el
 //   bloqueo del envío y de la red, imprime una línea `SELFTEST:{json}` y sale.
-// - `--bench [--runs=3]`: ejecuta el agente completo con `FODIBO_MODEL` N veces, puntúa contra
-//   `esperado.json`, mide tiempo por paso y memoria, escribe `bench-report.json` y sale.
+// - `--bench [--runs=3] [--sin-catalogo]`: ejecuta el agente completo con `FODIBO_MODEL` N veces, puntúa
+//   contra `esperado.json`, mide tiempo por paso y memoria, escribe `bench-report.json` y sale. Con
+//   `--sin-catalogo` todos los campos van al modelo (mide el modelo, no el catálogo).
 import { app, BrowserWindow } from 'electron';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -307,6 +308,8 @@ export interface BenchReport {
   sha256: string;
   /** `args`: lista completa de argumentos con la que se lanzó `llama-server`. */
   llamaServer: { binary: string; version: string; args: string[] };
+  /** Si el catálogo de conceptos resolvió los campos que reconoce (sin `--sin-catalogo`). */
+  catalog: boolean;
   runs: BenchRun[];
   accept: { ok: boolean; reasons: string[] };
 }
@@ -369,7 +372,11 @@ const out = (line: string): void => {
 };
 
 function summarize(report: BenchReport): string {
-  const lines = [`Modelo: ${report.model} (sha256 ${report.sha256.slice(0, 16)}…)`, `llama-server: ${report.llamaServer.version}`];
+  const lines = [
+    `Modelo: ${report.model} (sha256 ${report.sha256.slice(0, 16)}…)`,
+    `llama-server: ${report.llamaServer.version}`,
+    `Catálogo: ${report.catalog ? 'activado' : 'desactivado (--sin-catalogo)'}`,
+  ];
   report.runs.forEach((r, i) => {
     const s = r.score;
     const steps = Object.entries(r.stepMs)
@@ -391,6 +398,7 @@ export async function runBench(argv: string[], env: NodeJS.ProcessEnv, llama: { 
   const runsArg = argv.find((a) => a.startsWith('--runs='));
   const runs = runsArg ? Number(runsArg.slice('--runs='.length)) : 3;
   if (!Number.isInteger(runs) || runs < 1) throw new Error(`--runs no válido: ${runsArg ?? ''}`);
+  const useCatalog = !argv.includes('--sin-catalogo');
   const modelPath = env['FODIBO_MODEL'];
   if (!modelPath) throw new Error(MSG_NO_MODEL);
   const binary = env['FODIBO_LLAMA_SERVER'] || 'llama-server';
@@ -452,9 +460,10 @@ export async function runBench(argv: string[], env: NodeJS.ProcessEnv, llama: { 
           adapter: inst.adapter,
           model: createLlamaClient(baseUrl),
           declaration: decl,
+          ...(useCatalog ? {} : { catalog: false as const }),
           getBlockedSubmits: () => view.blockedSubmits - baseline,
           onEvent: (e) => {
-            if (e.type === 'log') out(`  ${e.text}`);
+            if (e.type === 'log') out(`  [${((Date.now() - started) / 1000).toFixed(1).padStart(6)} s] ${e.text}`);
             else if (e.type === 'state' && e.state !== 'rellenando') {
               state = e.state;
               message = e.message;
@@ -494,6 +503,7 @@ export async function runBench(argv: string[], env: NodeJS.ProcessEnv, llama: { 
     model: basename(modelPath),
     sha256,
     llamaServer: { binary, version, args: server.spawnArgs },
+    catalog: useCatalog,
     runs: results,
     accept: accept(results.map((r) => r.score)),
   };

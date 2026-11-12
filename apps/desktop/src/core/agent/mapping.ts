@@ -26,7 +26,8 @@ export function responseSchema(step: ObservedStep, decl: Declaration): object {
     forms.push({
       type: 'object',
       properties: {
-        pending: { type: 'string' },
+        // Breve: cada token generado cuesta tiempo en CPU.
+        pending: { type: 'string', maxLength: 80 },
         candidates:
           keys.length > 0
             ? { type: 'array', items: { enum: keys }, maxItems: MAX_CANDIDATES }

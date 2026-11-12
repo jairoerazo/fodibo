@@ -1,13 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AgentOrchestrator, type AgentEvent, type ModelClient } from '../orchestrator.js';
 import { ModelError } from '../model-client.js';
 import type { Declaration, ObservedField, ObservedStep, PortalAdapter } from '../types.js';
 
 const decl: Declaration = {
-  apellido: { tipo: 'text', valor: 'Muster' },
+  nachname: { tipo: 'text', valor: 'Muster' },
   nacimiento: { tipo: 'date', valor: '1980-03-05' },
   ingreso: { tipo: 'amount', valor: '1234.5' },
-  estado: { tipo: 'enum', valor: 'casado' },
+  estado: { tipo: 'enum', valor: 'verheiratet' },
   acepto: { tipo: 'boolean', valor: true },
 };
 const f = (o: Partial<ObservedField> & Pick<ObservedField, 'field_id' | 'type'>): ObservedField => ({
@@ -15,17 +15,17 @@ const f = (o: Partial<ObservedField> & Pick<ObservedField, 'field_id' | 'type'>)
 });
 const steps = (): ObservedStep[] => [
   { index: 1, total: 4, title: 'P1', isSummary: false, errors: [], fields: [f({ field_id: 'a', type: 'text' }), f({ field_id: 'b', type: 'date' })] },
-  { index: 2, total: 4, title: 'P2', isSummary: false, errors: [], fields: [f({ field_id: 'c', type: 'amount', required: true }), f({ field_id: 'd', type: 'select', options: ['soltero', 'casado'] })] },
+  { index: 2, total: 4, title: 'P2', isSummary: false, errors: [], fields: [f({ field_id: 'c', type: 'amount', required: true }), f({ field_id: 'd', type: 'select', options: ['ledig', 'verheiratet'] })] },
   { index: 3, total: 4, title: 'P3', isSummary: false, errors: [], fields: [f({ field_id: 'e', type: 'checkbox' }), f({ field_id: 'g', type: 'text', value: 'Muster' })] },
   { index: 4, total: 4, title: 'Resumen', isSummary: true, errors: [], fields: [] },
 ];
 const answers: Record<string, unknown> = {
-  a: { source: 'apellido' },
+  a: { source: 'nachname' },
   b: { source: 'nacimiento' },
   c: { pending: 'no sé', candidates: [] },
-  d: { source: 'estado', option: 'casado' },
+  d: { source: 'estado', option: 'verheiratet' },
   e: { source: 'acepto' },
-  g: { source: 'apellido' },
+  g: { source: 'nachname' },
 };
 const goodModel = (): ModelClient => ({
   async complete(_m, schema) {
@@ -58,13 +58,13 @@ describe('AgentOrchestrator', () => {
     const res = await new AgentOrchestrator({ adapter, model: goodModel(), declaration: decl, onEvent }).run();
     expect(states(events).at(-1)).toBe('entregado');
     expect(finished(events)).toHaveLength(1);
-    expect(written).toEqual({ a: 'Muster', b: '05.03.1980', d: 'casado', e: 'true' });
+    expect(written).toEqual({ a: 'Muster', b: '05.03.1980', d: 'verheiratet', e: 'true' });
     expect(calls.filter((c) => c === 'adv')).toHaveLength(3);
     expect(calls.at(-1)).toBe('obs');
     const fin = finished(events)[0]!;
     expect(fin.results).toEqual(res);
     expect(fin.pending.map((r) => r.field_id)).toEqual(['c']);
-    expect(res.find((r) => r.field_id === 'a')!.outcome).toEqual({ kind: 'filled', source: 'apellido', written: 'Muster' });
+    expect(res.find((r) => r.field_id === 'a')!.outcome).toEqual({ kind: 'filled', source: 'nachname', written: 'Muster' });
     expect(res.find((r) => r.field_id === 'g')!.outcome).toEqual({ kind: 'prefilled_ok' });
     expect(events.filter((e) => e.type === 'field')).toHaveLength(6);
     expect(events.some((e) => e.type === 'log')).toBe(true);
@@ -108,7 +108,7 @@ describe('AgentOrchestrator', () => {
       expect.objectContaining({ kind: 'pending', reason: 'modelo_sin_respuesta' }),
     ]);
     expect(written.a).toBeUndefined();
-    expect(written.d).toBe('casado');
+    expect(written.d).toBe('verheiratet');
     expect(states(events).at(-1)).toBe('entregado');
   });
 
@@ -222,7 +222,7 @@ describe('AgentOrchestrator', () => {
     const logs = events.flatMap((e) => (e.type === 'log' ? [e.text] : []));
     const has = (re: RegExp) => expect(logs.some((l) => re.test(l)), String(re)).toBe(true);
     has(/Observando/);
-    has(/Escribiendo a ← Muster \(desde apellido\)/);
+    has(/Escribiendo a ← Muster \(desde nachname\)/);
     has(/Verificado a/);
     has(/No se pudo verificar b: escrito "05\.03\.1980", leído "mal"/);
     has(/c: pendiente \(sin_dato\)/);
@@ -267,10 +267,172 @@ describe('AgentOrchestrator', () => {
     };
     const { onEvent } = collect();
     await new AgentOrchestrator({ adapter, model, declaration: decl, onEvent }).run();
-    const allowed = new Set(['Muster', '05.03.1980', 'casado', 'true', '1234.50']);
+    const allowed = new Set(['Muster', '05.03.1980', 'verheiratet', 'true', '1234.50']);
     expect(writes.length).toBeGreaterThan(0);
     for (const [, v] of writes) expect(allowed.has(v)).toBe(true);
     expect(writes.find(([id]) => id === 'a')).toBeUndefined();
     expect(calls).not.toContain('fill:a');
+  });
+});
+
+describe('AgentOrchestrator en streaming', () => {
+  // Modelo que anuncia cada campo con onField y espera a `release()` antes de terminar la respuesta.
+  const streamingModel = (opts: { fieldsOf?: (props: string[]) => [string, unknown][]; failAfterFirst?: boolean } = {}) => {
+    let release!: () => void;
+    let gate = new Promise<void>((r) => (release = r));
+    const calls: string[][] = [];
+    const model: ModelClient = {
+      async complete(_m, schema, _sig, onField) {
+        const props = Object.keys((schema as any).properties);
+        calls.push(props);
+        const fields = opts.fieldsOf ? opts.fieldsOf(props) : props.map((k): [string, unknown] => [k, answers[k]]);
+        onField?.(fields[0]![0], fields[0]![1]);
+        if (opts.failAfterFirst && calls.length === 1) throw new ModelError('se cortó');
+        await gate;
+        gate = Promise.resolve();
+        for (const [k, v] of fields.slice(1)) onField?.(k, v);
+        return Object.fromEntries(fields);
+      },
+    };
+    return { model, release: () => release(), calls };
+  };
+
+  it('escribe y verifica cada campo en cuanto llega, antes de que termine la respuesta', async () => {
+    const { adapter, calls } = fakeAdapter();
+    const { model, release } = streamingModel();
+    const run = new AgentOrchestrator({ adapter, model, declaration: decl, onEvent: () => {} }).run();
+    await vi.waitFor(() => expect(calls).toContain('read:a'));
+    expect(calls).not.toContain('fill:b');
+    release();
+    const res = await run;
+    expect(res.find((r) => r.field_id === 'b')!.outcome).toEqual({ kind: 'filled', source: 'nacimiento', written: '05.03.1980' });
+    expect(calls.filter((c) => c === 'fill:a')).toHaveLength(1);
+  });
+
+  it('un campo anunciado con forma no válida no se escribe; los válidos sí', async () => {
+    const { adapter, written } = fakeAdapter();
+    const { events, onEvent } = collect();
+    const { model, release } = streamingModel({
+      fieldsOf: (props) => props.map((k): [string, unknown] => [k, k === 'a' ? { source: 'nachname', extra: 1 } : answers[k]]),
+    });
+    release();
+    await new AgentOrchestrator({ adapter, model, declaration: decl, onEvent, maxSteps: 1 }).run();
+    // «b» es válido por sí solo y se escribe; «a» no, y la respuesta completa tampoco lo es.
+    expect(written).toEqual({ b: '05.03.1980' });
+    const pending = finished(events)[0]!.pending;
+    expect(pending.map((r) => [r.field_id, (r.outcome as any).reason])).toEqual([['a', 'modelo_sin_respuesta']]);
+  });
+
+  it('si la respuesta se corta, el reintento no repite los campos ya escritos', async () => {
+    const { adapter, calls, written } = fakeAdapter();
+    const { model, release, calls: modelCalls } = streamingModel({ failAfterFirst: true });
+    release();
+    const res = await new AgentOrchestrator({ adapter, model, declaration: decl, onEvent: () => {} }).run();
+    expect(modelCalls.length).toBeGreaterThan(1);
+    expect(calls.filter((c) => c === 'fill:a')).toHaveLength(1);
+    expect(written).toEqual({ a: 'Muster', b: '05.03.1980', d: 'verheiratet', e: 'true' });
+    expect(res.filter((r) => r.field_id === 'a')).toHaveLength(1);
+  });
+
+  it('si los dos intentos se cortan, lo ya escrito se conserva y el resto queda sin respuesta', async () => {
+    const { adapter, written } = fakeAdapter();
+    const { events, onEvent } = collect();
+    const model: ModelClient = {
+      async complete(_m, schema, _sig, onField) {
+        const first = Object.keys((schema as any).properties)[0]!;
+        onField?.(first, answers[first]);
+        throw new ModelError('se cortó');
+      },
+    };
+    await new AgentOrchestrator({ adapter, model, declaration: decl, onEvent, maxSteps: 1 }).run();
+    expect(written).toEqual({ a: 'Muster' });
+    const res = finished(events)[0]!.results;
+    expect(res.map((r) => [r.field_id, r.outcome.kind])).toEqual([
+      ['a', 'filled'],
+      ['b', 'pending'],
+    ]);
+  });
+
+  it('un error del portal al escribir durante el streaming corta la respuesta y termina en error', async () => {
+    const { adapter } = fakeAdapter();
+    adapter.rellenarCampo = async () => {
+      throw new Error('campo tapado');
+    };
+    let aborted = false;
+    const model: ModelClient = {
+      async complete(_m, schema, sig, onField) {
+        const props = Object.keys((schema as any).properties);
+        onField?.(props[0]!, answers[props[0]!]);
+        await new Promise<void>((r) => sig.addEventListener('abort', () => r()));
+        aborted = true;
+        throw new ModelError('petición cancelada');
+      },
+    };
+    const { events, onEvent } = collect();
+    await new AgentOrchestrator({ adapter, model, declaration: decl, onEvent }).run();
+    expect(aborted).toBe(true);
+    expect(states(events).at(-1)).toBe('error');
+  });
+});
+
+describe('AgentOrchestrator con catálogo', () => {
+  const cdecl: Declaration = {
+    bruttolohn_jahr: { tipo: 'amount', valor: '85400.00', moneda: 'CHF' },
+    krankenkasse_praemie_hauptperson: { tipo: 'amount', valor: '4380.00', moneda: 'CHF' },
+    krankenkasse_praemie_familie: { tipo: 'amount', valor: '11940.00', moneda: 'CHF' },
+    nachname: { tipo: 'text', valor: 'Muster' },
+  };
+  const cstep = (fields: ObservedField[]): ObservedStep[] => [
+    { index: 1, total: 2, title: 'P1', isSummary: false, errors: [], fields },
+    { index: 2, total: 2, title: 'Resumen', isSummary: true, errors: [], fields: [] },
+  ];
+  const brutto = f({ field_id: 'b', type: 'amount', label: 'Bruttolohn', required: true });
+  const kk = f({ field_id: 'k', type: 'amount', label: 'Krankenkassenprämien', required: true });
+  const unknown = f({ field_id: 'u', type: 'text', label: 'Unbekanntes Feld' });
+  const spyModel = (reply: Record<string, unknown> = {}) => {
+    const seen: string[][] = [];
+    const model: ModelClient = {
+      async complete(_m, schema) {
+        const props = Object.keys((schema as any).properties);
+        seen.push(props);
+        return Object.fromEntries(props.map((k) => [k, reply[k] ?? { pending: 'x', candidates: [] }]));
+      },
+    };
+    return { model, seen };
+  };
+
+  it('si el catálogo resuelve todo el paso, no llama al modelo', async () => {
+    const { adapter, written } = fakeAdapter({ list: cstep([brutto, kk]) });
+    const { model, seen } = spyModel();
+    const res = await new AgentOrchestrator({ adapter, model, declaration: cdecl, onEvent: () => {} }).run();
+    expect(seen).toEqual([]);
+    expect(written).toEqual({ b: '85400.00' });
+    expect(res.find((r) => r.field_id === 'k')?.outcome).toMatchObject({
+      kind: 'pending',
+      reason: 'ambiguo',
+      candidates: [{ key: 'krankenkasse_praemie_familie' }, { key: 'krankenkasse_praemie_hauptperson' }],
+    });
+  });
+
+  it('el modelo solo recibe los campos que el catálogo no reconoce', async () => {
+    const { adapter, written } = fakeAdapter({ list: cstep([brutto, unknown]) });
+    const { model, seen } = spyModel({ u: { source: 'nachname' } });
+    await new AgentOrchestrator({ adapter, model, declaration: cdecl, onEvent: () => {} }).run();
+    expect(seen).toEqual([['u']]);
+    expect(written).toEqual({ b: '85400.00', u: 'Muster' });
+  });
+
+  it('un valor previo distinto en un campo del catálogo queda pendiente, como con el modelo', async () => {
+    const { adapter, written } = fakeAdapter({ list: cstep([{ ...brutto, value: '1.00' }]) });
+    const res = await new AgentOrchestrator({ adapter, model: spyModel().model, declaration: cdecl, onEvent: () => {} }).run();
+    expect(written).toEqual({});
+    expect(res[0]?.outcome).toMatchObject({ kind: 'pending', reason: 'valor_previo_distinto' });
+  });
+
+  it('con `catalog: false` el modelo recibe todos los campos', async () => {
+    const { adapter } = fakeAdapter({ list: cstep([brutto, kk]) });
+    const { model, seen } = spyModel({ b: { source: 'bruttolohn_jahr' } });
+    await new AgentOrchestrator({ adapter, model, declaration: cdecl, onEvent: () => {}, catalog: false }).run();
+    expect(seen).toEqual([['b', 'k']]);
   });
 });

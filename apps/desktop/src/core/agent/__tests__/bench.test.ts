@@ -3,19 +3,19 @@ import { accept, parseExpected, scoreRun, type ExpectedField, type RunScore } fr
 import type { Declaration, FieldOutcome, FieldResult } from '../types.js';
 
 const decl: Declaration = {
-  nombre: { tipo: 'text', valor: 'Anna' },
-  estado_civil: { tipo: 'enum', valor: 'casado' },
-  salario_bruto: { tipo: 'amount', valor: '85400.00', moneda: 'CHF' },
-  salario_neto: { tipo: 'amount', valor: '74210.00', moneda: 'CHF' },
-  prima_titular: { tipo: 'amount', valor: '4380.00', moneda: 'CHF' },
-  prima_familia: { tipo: 'amount', valor: '11940.00', moneda: 'CHF' },
+  vorname: { tipo: 'text', valor: 'Anna' },
+  zivilstand: { tipo: 'enum', valor: 'marié' },
+  bruttolohn_jahr: { tipo: 'amount', valor: '85400.00', moneda: 'CHF' },
+  nettolohn_jahr: { tipo: 'amount', valor: '74210.00', moneda: 'CHF' },
+  krankenkasse_praemie_hauptperson: { tipo: 'amount', valor: '4380.00', moneda: 'CHF' },
+  krankenkasse_praemie_familie: { tipo: 'amount', valor: '11940.00', moneda: 'CHF' },
   iban: { tipo: 'iban', valor: 'CH9300762011623852957' },
 };
 
 const expected: Record<string, ExpectedField> = {
-  '1/Vorname': { source: 'nombre' },
-  '1/Zivilstand': { source: 'estado_civil', option: 'verheiratet' },
-  '2/Bruttolohn': { source: 'salario_bruto' },
+  '1/Vorname': { source: 'vorname' },
+  '1/Zivilstand': { source: 'zivilstand', option: 'verheiratet' },
+  '2/Bruttolohn': { source: 'bruttolohn_jahr' },
   '2/AHV/IV/EO-Beiträge': { pending: true },
   '3/Krankenkassenprämien': { pending: true },
   '4/IBAN': { source: 'iban' },
@@ -35,9 +35,9 @@ const pending: FieldOutcome = { kind: 'pending', reason: 'ambiguo', candidates: 
 
 function perfect(): FieldResult[] {
   return [
-    r(1, 'Vorname', filled('nombre', 'Anna')),
-    r(1, 'Zivilstand', filled('estado_civil', 'verheiratet')),
-    r(2, 'Bruttolohn', filled('salario_bruto', '85400.00')),
+    r(1, 'Vorname', filled('vorname', 'Anna')),
+    r(1, 'Zivilstand', filled('zivilstand', 'verheiratet')),
+    r(2, 'Bruttolohn', filled('bruttolohn_jahr', '85400.00')),
     r(2, 'AHV/IV/EO-Beiträge', { kind: 'pending', reason: 'sin_dato', candidates: [] }),
     r(3, 'Krankenkassenprämien', pending),
     r(4, 'IBAN', filled('iban', 'CH9300762011623852957')),
@@ -68,18 +68,18 @@ describe('scoreRun', () => {
     expect(s.correct).toBe(4);
   });
 
-  it('asignar salario_neto a «Bruttolohn» cuenta como equivocado', () => {
-    const s = scoreRun(replace(perfect(), 'Bruttolohn', filled('salario_neto', '74210.00')), expected, decl, 0, options);
+  it('asignar nettolohn_jahr a «Bruttolohn» cuenta como equivocado', () => {
+    const s = scoreRun(replace(perfect(), 'Bruttolohn', filled('nettolohn_jahr', '74210.00')), expected, decl, 0, options);
     expect(s.correct).toBe(3);
     expect(s.wrong).toBe(1);
     expect(s.invented).toBe(0);
     expect(s.failures).toEqual([
-      { key: '2/Bruttolohn', expected: { source: 'salario_bruto' }, got: { kind: 'filled', source: 'salario_neto', written: '74210.00' } },
+      { key: '2/Bruttolohn', expected: { source: 'bruttolohn_jahr' }, got: { kind: 'filled', source: 'nettolohn_jahr', written: '74210.00' } },
     ]);
   });
 
   it('rellenar el campo ambiguo cuenta como equivocado y accept falla', () => {
-    const s = scoreRun(replace(perfect(), 'Krankenkassenprämien', filled('prima_titular', '4380.00')), expected, decl, 0, options);
+    const s = scoreRun(replace(perfect(), 'Krankenkassenprämien', filled('krankenkasse_praemie_hauptperson', '4380.00')), expected, decl, 0, options);
     expect(s.wrong).toBe(1);
     expect(s.pendingOk).toBe(1);
     expect(s.pendingMissed).toBe(1);
@@ -102,7 +102,7 @@ describe('scoreRun', () => {
   });
 
   it('un written manipulado cuenta como inventado', () => {
-    const s = scoreRun(replace(perfect(), 'Bruttolohn', filled('salario_bruto', '99999.00')), expected, decl, 0, options);
+    const s = scoreRun(replace(perfect(), 'Bruttolohn', filled('bruttolohn_jahr', '99999.00')), expected, decl, 0, options);
     expect(s.invented).toBe(1);
     expect(accept([s]).ok).toBe(false);
   });
@@ -122,7 +122,7 @@ describe('scoreRun', () => {
   });
 
   it('select: la fuente correcta con otra opción escrita cuenta como equivocado', () => {
-    const s = scoreRun(replace(perfect(), 'Zivilstand', filled('estado_civil', 'ledig')), expected, decl, 0, options);
+    const s = scoreRun(replace(perfect(), 'Zivilstand', filled('zivilstand', 'ledig')), expected, decl, 0, options);
     expect(s.correct).toBe(3);
     expect(s.wrong).toBe(1);
     expect(s.invented).toBe(0); // «ledig» es una opción existente de la página
@@ -130,13 +130,13 @@ describe('scoreRun', () => {
   });
 
   it('select: la fuente y la opción esperadas cuentan como correcto', () => {
-    const s = scoreRun(replace(perfect(), 'Zivilstand', filled('estado_civil', 'verheiratet')), expected, decl, 0, options);
+    const s = scoreRun(replace(perfect(), 'Zivilstand', filled('zivilstand', 'verheiratet')), expected, decl, 0, options);
     expect(s.correct).toBe(4);
     expect(s.wrong).toBe(0);
   });
 
   it('select: la opción correcta con otra fuente cuenta como equivocado', () => {
-    const s = scoreRun(replace(perfect(), 'Zivilstand', filled('nombre', 'verheiratet')), expected, decl, 0, options);
+    const s = scoreRun(replace(perfect(), 'Zivilstand', filled('vorname', 'verheiratet')), expected, decl, 0, options);
     expect(s.correct).toBe(3);
     expect(s.wrong).toBe(1);
   });
@@ -190,10 +190,10 @@ describe('parseExpected', () => {
     expect(m.size).toBe(3);
   });
   it('lee la opción esperada de un select', () => {
-    const m = parseExpected({ '1/Zivilstand': { source: 'estado_civil', option: 'verheiratet' } });
-    expect(m.get('1/Zivilstand')?.expected).toEqual({ source: 'estado_civil', option: 'verheiratet' });
-    expect(() => parseExpected({ '1/Zivilstand': { source: 'estado_civil', option: 3 } })).toThrow();
-    expect(() => parseExpected({ '1/Zivilstand': { source: 'estado_civil', option: '' } })).toThrow();
+    const m = parseExpected({ '1/Zivilstand': { source: 'zivilstand', option: 'verheiratet' } });
+    expect(m.get('1/Zivilstand')?.expected).toEqual({ source: 'zivilstand', option: 'verheiratet' });
+    expect(() => parseExpected({ '1/Zivilstand': { source: 'zivilstand', option: 3 } })).toThrow();
+    expect(() => parseExpected({ '1/Zivilstand': { source: 'zivilstand', option: '' } })).toThrow();
   });
   it('rechaza claves o valores mal formados', () => {
     expect(() => parseExpected({ sinpaso: { pending: true } })).toThrow();
