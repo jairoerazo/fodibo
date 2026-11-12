@@ -53,3 +53,17 @@ export function writePackage(
   }
   return { packageId, dir, entries };
 }
+
+/**
+ * Expediente listo para aprobar: un PDF (lohnausweis) y un PNG (quittung) confirmados y un campo confirmado
+ * con evidencia en el PDF. Devuelve también los ids de los documentos.
+ */
+export async function approvable() {
+  const h = await mk();
+  const res = await h.svc.importPackage(h.caseId, writePackage(h.inboxDir, three.slice(0, 2)).packageId);
+  const [pdf, png] = res.documents.map((d) => d.documentId) as [string, string];
+  h.svc.setDocument(pdf, { docType: 'lohnausweis', status: 'confirmado' });
+  h.svc.setDocument(png, { docType: 'quittung', status: 'confirmado' });
+  h.svc.saveField(h.caseId, { conceptId: 'bruttolohn_jahr', variant: '', valor: '85400', evidence: [{ documentId: pdf, page: 1 }] });
+  return { ...h, pdf, png };
+}

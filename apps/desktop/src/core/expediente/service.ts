@@ -17,6 +17,8 @@ import {
   type ProposedFieldInput,
 } from './fields.js';
 import { importPackage, listImportable, recoverStore, type ImportContext, type ImportResult, type ImportablePackage, type RecoverResult } from './import.js';
+import { approve as approveTx, approvedDeclaration as approvedDeclarationTx, type ApprovalSummary, type ApprovedDeclaration } from './approval.js';
+import { caseStatus, type Blocker, type CaseStatus, type Warning } from './status.js';
 import { BlobStore, openStore, type CaseStore } from './storage/index.js';
 import {
   ACTOR_LOCAL,
@@ -53,6 +55,8 @@ export type DocumentView = {
   status: DocStatus;
   sourceDevice: string;
   importedAt: string;
+  /** Falso si el original falta en el almacén (según `recover()`) o falló una lectura posterior. */
+  available: boolean;
 };
 export type FieldView = {
   fieldId: string;
@@ -77,6 +81,10 @@ export type CaseView = {
   persons: PersonView[];
   documents: DocumentView[];
   fields: FieldView[];
+  status: CaseStatus;
+  blockers: Blocker[];
+  warnings: Warning[];
+  lastApproval?: ApprovalSummary;
 };
 export type ConceptView = { id: string; tipo: DeclType; labels: string[]; variants: boolean; values?: string[] };
 export type FieldHistoryEntry = {
@@ -146,7 +154,7 @@ function checkRoleCounts(roles: PersonRole[]): void {
 
 const personView = (p: PersonRow): PersonView => ({ personId: p.person_id, role: p.role, ordinal: p.ordinal, slug: p.slug, label: p.label });
 const json = (v: unknown): string | null => (v === null ? null : JSON.stringify(v));
-const documentView = (d: DocumentRow): DocumentView => ({
+const documentView = (d: DocumentRow, available: boolean): DocumentView => ({
   documentId: d.document_id,
   sha256: d.sha256,
   mime: d.mime,
@@ -156,6 +164,7 @@ const documentView = (d: DocumentRow): DocumentView => ({
   status: d.status,
   sourceDevice: d.source_device,
   importedAt: d.imported_at,
+  available,
 });
 const fieldView = (f: FieldRow, evidence: Evidence[]): FieldView => ({
   fieldId: f.field_id,
@@ -176,7 +185,7 @@ export class ExpedienteService {
   private listeners = new Set<(e: ExpedienteEvent) => void>();
   private pending: ExpedienteEvent[] = [];
   private queue: Promise<unknown> = Promise.resolve();
-  /** Documentos cuyo blob falta o tiene otro tamaño, según la última `recover()`; lo consume la Tarea 9. */
+  /** Documentos cuyo blob falta o tiene otro tamaño (última `recover()`) o cuya lectura falló después (`reportUnavailable`). */
   protected missing = new Set<string>();
 
   private constructor(
@@ -221,7 +230,11 @@ export class ExpedienteService {
 
   /** Importa el paquete al expediente de forma idempotente (spec §9); las llamadas se serializan. */
   importPackage(caseId: string, packageId: string): Promise<ImportResult> {
-    return this.enqueue(() => importPackage(this.importContext(), caseId, packageId));
+    return this.enqueue(async () => {
+      const result = await importPackage(this.importContext(), caseId, packageId);
+      await this.refreshMissing();
+      return result;
+    });
   }
 
   /** Borra temporales y blobs huérfanos y anota los documentos sin su original (spec §9, recuperación). */
@@ -231,6 +244,24 @@ export class ExpedienteService {
       this.missing = new Set(result.missing);
       return result;
     });
+  }
+
+  /** Quita de `missing` los documentos cuyo blob vuelve a estar en el almacén con su tamaño (p. ej. tras importar de nuevo el archivo). */
+  private async refreshMissing(): Promise<void> {
+    for (const id of [...this.missing]) {
+      const doc = this.store.getDocument(id);
+      if (!doc) {
+        this.missing.delete(id);
+        continue;
+      }
+      const st = await this.blobs.stat(doc.sha256);
+      if (st && st.size === doc.size) this.missing.delete(id);
+    }
+  }
+
+  /** Marca un original como no disponible tras una lectura fallida (lo llama el manejador del protocolo). */
+  reportUnavailable(documentId: string): void {
+    if (this.store.getDocument(documentId)) this.missing.add(documentId);
   }
 
   close(): void {
@@ -327,16 +358,53 @@ export class ExpedienteService {
       list.push({ documentId: e.document_id, page: e.page });
       evidence.set(e.field_id, list);
     }
+    const persons = this.store.listPersons(caseId).map(personView);
+    const documents = this.store.listDocuments(caseId).map((d) => documentView(d, !this.missing.has(d.document_id)));
+    const fields = this.store.listFields(caseId).map((f) => fieldView(f, evidence.get(f.field_id) ?? []));
+    const approval = this.store.getLatestApprovalInfo(caseId);
+    const lastApproval: ApprovalSummary | undefined = approval
+      ? { approvalId: approval.approval_id, caseRevision: approval.case_revision, approvedAt: approval.approved_at, contentHash: approval.content_hash }
+      : undefined;
+    const { status, blockers, warnings } = caseStatus({ revision: row.revision, persons, documents, fields, lastApproval }, this.concepts);
     return {
       caseId: row.case_id,
       taxYear: row.tax_year,
       jurisdiction: row.jurisdiction,
       revision: row.revision,
       createdAt: row.created_at,
-      persons: this.store.listPersons(caseId).map(personView),
-      documents: this.store.listDocuments(caseId).map(documentView),
-      fields: this.store.listFields(caseId).map((f) => fieldView(f, evidence.get(f.field_id) ?? [])),
+      persons,
+      documents,
+      fields,
+      status,
+      blockers,
+      warnings,
+      ...(lastApproval ? { lastApproval } : {}),
     };
+  }
+
+  /**
+   * Aprueba exactamente la revisión que el usuario vio (spec §8.1). Síncrono: una única transacción.
+   * Aprobar no sube la revisión; repetirlo sobre la misma revisión devuelve la aprobación existente.
+   */
+  approve(caseId: string, expectedRevision: number): ApprovalSummary {
+    return this.transact(() =>
+      approveTx(
+        {
+          store: this.store,
+          concepts: this.concepts,
+          now: this.now,
+          view: (id) => this.getCase(id),
+          record: (id, revision, entries) => this.writeEntries(id, revision, entries),
+        },
+        caseId,
+        expectedRevision,
+      ),
+    );
+  }
+
+  /** Lo único que puede consumir el agente: la última aprobación vigente, leída solo de su instantánea (spec §8.3). */
+  approvedDeclaration(caseId: string): ApprovedDeclaration {
+    return approvedDeclarationTx(this.store, caseId);
   }
 
   private fieldsContext(): FieldsContext {

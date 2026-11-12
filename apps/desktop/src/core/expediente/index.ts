@@ -16,3 +16,5 @@ export type {
 export { ExpedienteError, type ExpedienteErrorCode } from './errors.js';
 export type { ImportResult, ImportablePackage, RecoverResult } from './import.js';
 export type { DocumentPatch, FieldInput, FieldState, ProposedFieldInput } from './fields.js';
+export type { ApprovalSummary, ApprovedDeclaration } from './approval.js';
+export type { Blocker, CaseStatus, Warning } from './status.js';

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ExpedienteError } from '../errors.js';
-import type { CaseRow, ChangeRow, DocumentRow, FieldEvidenceRow, FieldRow, ImportFileRow, ImportRow, PersonRow } from '../types.js';
+import type { ApprovalRow, CaseRow, ChangeRow, DocumentRow, FieldEvidenceRow, FieldRow, ImportFileRow, ImportRow, PersonRow } from '../types.js';
 import { MIGRATIONS, type Migration } from './schema.js';
 
 export type OpenStoreOptions = {
@@ -67,6 +67,12 @@ export interface CaseStore {
   fieldIdsCitingDocument(documentId: string): string[];
   /** Entradas de `changes` de un campo en orden cronológico. */
   listFieldChanges(fieldId: string): ChangeRow[];
+  insertApproval(row: ApprovalRow): void;
+  getApprovalByRevision(caseId: string, caseRevision: number): ApprovalRow | undefined;
+  /** Última aprobación del expediente (la de mayor `case_revision`), con su instantánea. */
+  getLatestApproval(caseId: string): ApprovalRow | undefined;
+  /** Igual que `getLatestApproval` pero sin leer la instantánea (para el estado derivado). */
+  getLatestApprovalInfo(caseId: string): Omit<ApprovalRow, 'snapshot'> | undefined;
   close(): void;
 }
 
@@ -233,6 +239,15 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
   const fieldIdsCitingDocument = conn.prepare('SELECT DISTINCT field_id FROM field_evidence WHERE document_id = ? ORDER BY field_id');
   const listFieldChanges = conn.prepare("SELECT * FROM changes WHERE entity = 'field' AND entity_id = ? ORDER BY change_id");
 
+  const insertApproval = conn.prepare(
+    'INSERT INTO approvals (approval_id, case_id, case_revision, approved_at, approver, content_hash, snapshot) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  const getApprovalByRevision = conn.prepare('SELECT * FROM approvals WHERE case_id = ? AND case_revision = ?');
+  const getLatestApproval = conn.prepare('SELECT * FROM approvals WHERE case_id = ? ORDER BY case_revision DESC LIMIT 1');
+  const getLatestApprovalInfo = conn.prepare(
+    'SELECT approval_id, case_id, case_revision, approved_at, approver, content_hash FROM approvals WHERE case_id = ? ORDER BY case_revision DESC LIMIT 1',
+  );
+
   return {
     transaction<T>(fn: () => T): T {
       try {
@@ -361,6 +376,18 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
     },
     listFieldChanges(fieldId) {
       return listFieldChanges.all(fieldId) as ChangeRow[];
+    },
+    insertApproval(r) {
+      insertApproval.run(r.approval_id, r.case_id, r.case_revision, r.approved_at, r.approver, r.content_hash, r.snapshot);
+    },
+    getApprovalByRevision(caseId, caseRevision) {
+      return getApprovalByRevision.get(caseId, caseRevision) as ApprovalRow | undefined;
+    },
+    getLatestApproval(caseId) {
+      return getLatestApproval.get(caseId) as ApprovalRow | undefined;
+    },
+    getLatestApprovalInfo(caseId) {
+      return getLatestApprovalInfo.get(caseId) as Omit<ApprovalRow, 'snapshot'> | undefined;
     },
     close() {
       conn.close();
