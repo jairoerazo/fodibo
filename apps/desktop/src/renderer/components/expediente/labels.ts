@@ -68,3 +68,11 @@ export function formatValue(f: Pick<CaseView['fields'][number], 'valor' | 'moned
 export function evidenceLabel(name: string, page: number): string {
   return page === 0 ? `${name}, documento completo` : `${name}, página ${page}`;
 }
+
+/** Texto de un error del núcleo; si el almacén falló, incluye la ruta de la última copia de seguridad (spec §13). */
+export function errorText(error: { code: string; message: string; details?: unknown }): string {
+  const backup = (error.details as { backup?: unknown } | undefined)?.backup;
+  return error.code === 'storage_error' && typeof backup === 'string' && backup
+    ? `${error.message} Última copia de seguridad: ${backup}`
+    : error.message;
+}

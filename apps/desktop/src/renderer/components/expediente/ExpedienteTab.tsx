@@ -6,7 +6,7 @@ import { DocumentViewer } from './DocumentViewer.js';
 import { DocumentList } from './DocumentList.js';
 import { FieldForm } from './FieldForm.js';
 import { FieldList } from './FieldList.js';
-import { BLOCKER_LABEL, WARNING_LABEL } from './labels.js';
+import { BLOCKER_LABEL, errorText, WARNING_LABEL } from './labels.js';
 import { NewCaseForm } from './NewCaseForm.js';
 
 type Field = CaseView['fields'][number];
@@ -21,6 +21,8 @@ export function ExpedienteTab({
   onSelectDocument,
   pendingImport,
   onImportResult,
+  visible = true,
+  receivedCount = 0,
 }: {
   caseId: string | undefined;
   onSelectCase: (caseId: string | undefined) => void;
@@ -29,6 +31,10 @@ export function ExpedienteTab({
   /** Importación pedida desde otra pestaña: pasa por la misma guarda de «anula la aprobación». `seq` distingue peticiones repetidas. */
   pendingImport?: { packageId: string; seq: number };
   onImportResult?: (r: Result<ImportResult>) => void;
+  /** Si la pestaña está a la vista: al mostrarse se recargan los paquetes sin importar. */
+  visible?: boolean;
+  /** Cambia cada vez que llega un paquete: recarga los paquetes sin importar si la pestaña está a la vista. */
+  receivedCount?: number;
 }) {
   const [cases, setCases] = useState<CaseSummary[]>([]);
   /** Solo 'ok' autoriza a concluir que un expediente recordado ya no existe; un fallo transitorio no debe borrarlo. */
@@ -42,6 +48,14 @@ export function ExpedienteTab({
   const [page, setPage] = useState(1);
   const [approve, setApprove] = useState<{ error?: string; busy: boolean }>();
   const [annul, setAnnul] = useState<{ resolve: (ok: boolean) => void }>();
+  // Copia síncrona del aviso pendiente: permite resolverlo al cambiar de expediente o al pedir otro.
+  const annulRef = useRef<{ resolve: (ok: boolean) => void } | undefined>(undefined);
+  const settleAnnul = (ok: boolean) => {
+    const pending = annulRef.current;
+    annulRef.current = undefined;
+    setAnnul(undefined);
+    pending?.resolve(ok);
+  };
   const viewRef = useRef<CaseView | undefined>(undefined);
   viewRef.current = view;
   const caseIdRef = useRef(caseId);
@@ -50,7 +64,8 @@ export function ExpedienteTab({
   const seqRef = useRef(0);
   const appliedRef = useRef(0);
   const applyView = (id: string, seq: number, v: CaseView): boolean => {
-    if (id !== caseIdRef.current || seq <= appliedRef.current) return false;
+    // La vista debe ser del expediente pedido y del que se muestra: nunca se pinta la de otro.
+    if (id !== caseIdRef.current || v.caseId !== id || seq <= appliedRef.current) return false;
     appliedRef.current = seq;
     setView(v);
     return true;
@@ -64,34 +79,40 @@ export function ExpedienteTab({
       setCasesState('ok');
     } else {
       setCasesState('failed');
-      setError(r.error.message);
+      setError(errorText(r.error));
     }
   }, []);
   const loadImportable = useCallback(async () => {
     const r = await api().listImportable();
     if (r.ok) setImportable(r.value);
-    else setError(r.error.message);
+    else setError(errorText(r.error));
   }, []);
   const loadView = useCallback(async (id: string) => {
     const seq = ++seqRef.current;
     const r = await api().getCase(id);
     if (id !== caseIdRef.current) return;
     if (r.ok) applyView(id, seq, r.value);
-    else setError(r.error.message);
+    else setError(errorText(r.error));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     void loadCases();
-    void loadImportable();
-    void api().listConcepts().then((r) => (r.ok ? setConcepts(r.value) : setError(r.error.message)));
-  }, [loadCases, loadImportable]);
+    void api().listConcepts().then((r) => (r.ok ? setConcepts(r.value) : setError(errorText(r.error))));
+  }, [loadCases]);
+
+  // Los paquetes sin importar cambian fuera de esta pestaña: se recargan al mostrarla y al llegar uno nuevo.
+  useEffect(() => {
+    if (visible) void loadImportable();
+  }, [visible, receivedCount, loadImportable]);
 
   // Un expediente recordado que ya no existe se descarta en silencio.
   useEffect(() => {
     setView(undefined);
     setForm(undefined);
     setApprove(undefined);
+    // Un aviso de «anula la aprobación» era para el expediente anterior: se cancela.
+    settleAnnul(false);
     // Lo que estuviera en vuelo para otro expediente queda obsoleto.
     appliedRef.current = ++seqRef.current;
     if (!caseId || casesState === 'loading') return;
@@ -110,20 +131,44 @@ export function ExpedienteTab({
     [loadCases, loadView],
   );
 
-  /** Un expediente aprobado avisa antes del primer cambio: editarlo anula la aprobación (spec §10.1). */
-  const guard = (): Promise<boolean> =>
-    viewRef.current?.status === 'aprobado' ? new Promise<boolean>((resolve) => setAnnul({ resolve })) : Promise.resolve(true);
+  /**
+   * Un expediente aprobado avisa antes del primer cambio: editarlo anula la aprobación (spec §10.1).
+   * Solo autoriza si `id` sigue siendo el expediente mostrado al resolverse; sin vista cargada se consulta antes de decidir.
+   */
+  const guard = async (id: string): Promise<boolean> => {
+    let current = viewRef.current;
+    if (!current || current.caseId !== id) {
+      const r = await api().getCase(id);
+      if (id !== caseIdRef.current) return false;
+      if (!r.ok) {
+        setError(errorText(r.error));
+        return false;
+      }
+      current = r.value;
+    }
+    if (current.status === 'aprobado') {
+      // Un aviso anterior aún abierto se cancela: nunca queda una promesa colgada.
+      settleAnnul(false);
+      const ok = await new Promise<boolean>((resolve) => {
+        annulRef.current = { resolve };
+        setAnnul(annulRef.current);
+      });
+      if (!ok) return false;
+    }
+    return id === caseIdRef.current;
+  };
 
-  const mutate = async (call: () => Promise<Result<CaseView>>, quiet = false): Promise<Result<CaseView>> => {
-    if (!(await guard())) return CANCELLED;
+  /** `call` recibe el expediente leído ANTES del aviso; si mientras tanto cambió el mostrado, no se escribe nada. */
+  const mutate = async (call: (id: string) => Promise<Result<CaseView>>, quiet = false): Promise<Result<CaseView>> => {
     const id = caseIdRef.current;
+    if (!id || !(await guard(id))) return CANCELLED;
     const seq = ++seqRef.current;
-    const r = await call();
+    const r = await call(id);
     if (id !== caseIdRef.current) return r;
     if (r.ok) {
-      applyView(id!, seq, r.value);
+      applyView(id, seq, r.value);
       setError(undefined);
-    } else if (!quiet) setError(r.error.message);
+    } else if (!quiet) setError(errorText(r.error));
     return r;
   };
 
@@ -151,11 +196,11 @@ export function ExpedienteTab({
 
   const importById = async (packageId: string) => {
     const id = caseIdRef.current;
-    if (!id || !(await guard())) return;
+    if (!id || !(await guard(id))) return;
     const r = await api().importPackage(id, packageId);
     onImportResult?.(r);
     if (id !== caseIdRef.current) return;
-    if (!r.ok) return setError(r.error.message);
+    if (!r.ok) return setError(errorText(r.error));
     setError(undefined);
     await Promise.all([loadView(id), loadImportable()]);
   };
@@ -170,14 +215,15 @@ export function ExpedienteTab({
   }, [pendingImport]);
 
   const saveField = (input: FieldInput) =>
-    mutate(() => api().saveField(caseId!, input), true).then((r) => {
+    mutate((id) => api().saveField(id, input), true).then((r) => {
       if (r.ok) setForm(undefined);
       return r;
     });
 
+  /** Se aprueba exactamente la vista mostrada en el diálogo (spec §8.1): su expediente y su revisión. */
   const confirmApprove = async () => {
-    if (!view || !caseId) return;
-    const id = caseId;
+    if (!view || view.caseId !== caseIdRef.current) return;
+    const id = view.caseId;
     setApprove({ busy: true });
     const r = await api().approve(id, view.revision);
     if (id !== caseIdRef.current) return;
@@ -185,7 +231,7 @@ export function ExpedienteTab({
     await loadView(id);
     if (id !== caseIdRef.current) return;
     if (r.ok) setApprove(undefined);
-    else setApprove({ busy: false, error: r.error.message });
+    else setApprove({ busy: false, error: errorText(r.error) });
   };
 
   const selectEvidence = (documentId: string, p: number) => {
@@ -197,8 +243,12 @@ export function ExpedienteTab({
   const entityName = (b: CaseView['blockers'][number]) =>
     b.entity === 'document' ? view?.documents.find((d) => d.documentId === b.id)?.originalName : b.entity === 'field' ? view?.fields.find((f) => f.fieldId === b.id)?.key : undefined;
 
+  // Con un diálogo abierto el resto de la pestaña queda inerte: ni el teclado puede cambiar de expediente por debajo.
+  const dialogOpen = Boolean(annul || (view && approve));
+
   return (
     <div className="expediente">
+      <div className="expediente-body" inert={dialogOpen}>
       <CaseHeader
         cases={cases ?? []}
         caseId={caseId}
@@ -256,7 +306,7 @@ export function ExpedienteTab({
                   setPage(1);
                 }}
                 onPatch={patchDocument}
-                onShowInFolder={(d) => void api().showDocumentInFolder(d.documentId).then((r) => !r.ok && setError(r.error.message))}
+                onShowInFolder={(d) => void api().showDocumentInFolder(d.documentId).then((r) => !r.ok && setError(errorText(r.error)))}
               />
               <h4>Paquetes sin importar</h4>
               {importable.length === 0 ? (
@@ -295,8 +345,8 @@ export function ExpedienteTab({
                 concepts={concepts}
                 onEdit={(f) => setForm({ mode: 'edit', field: f })}
                 onConfirm={(f) =>
-                  void mutate(() =>
-                    api().saveField(caseId!, {
+                  void mutate((id) =>
+                    api().saveField(id, {
                       fieldId: f.fieldId,
                       conceptId: f.conceptId,
                       variant: f.variant,
@@ -328,10 +378,11 @@ export function ExpedienteTab({
               )}
             </section>
           </div>
-          {approve && (
-            <ApproveDialog view={view} error={approve.error} busy={approve.busy} onConfirm={() => void confirmApprove()} onCancel={() => setApprove(undefined)} />
-          )}
         </>
+      )}
+      </div>
+      {view && approve && (
+        <ApproveDialog view={view} error={approve.error} busy={approve.busy} onConfirm={() => void confirmApprove()} onCancel={() => setApprove(undefined)} />
       )}
       {annul && (
         <div className="overlay">
@@ -341,19 +392,13 @@ export function ExpedienteTab({
               <button
                 type="button"
                 autoFocus
-                onClick={() => {
-                  annul.resolve(true);
-                  setAnnul(undefined);
-                }}
+                onClick={() => settleAnnul(true)}
               >
                 Continuar
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  annul.resolve(false);
-                  setAnnul(undefined);
-                }}
+                onClick={() => settleAnnul(false)}
               >
                 Cancelar
               </button>

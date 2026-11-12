@@ -1,6 +1,7 @@
 import { useId, useState, type FormEvent } from 'react';
 import type { CaseInput, Result, CaseView } from '../../../shared/expediente-ipc.js';
 import { CANTONS } from '../../../core/expediente/types.js';
+import { errorText } from './labels.js';
 
 /** Alta de expediente: ejercicio, cantón y personas (titular obligatorio; pareja e hijos opcionales). */
 export function NewCaseForm({ onCreate, onCancel }: { onCreate: (input: CaseInput) => Promise<Result<CaseView>>; onCancel: () => void }) {
@@ -28,7 +29,7 @@ export function NewCaseForm({ onCreate, onCancel }: { onCreate: (input: CaseInpu
     setBusy(false);
     if (!r.ok) {
       const f = (r.error.details as { field?: string } | undefined)?.field;
-      setErrors({ [f === 'taxYear' ? 'year' : f === 'jurisdiction' ? 'canton' : 'form']: r.error.message });
+      setErrors({ [f === 'taxYear' ? 'year' : f === 'jurisdiction' ? 'canton' : 'form']: errorText(r.error) });
     }
   };
 

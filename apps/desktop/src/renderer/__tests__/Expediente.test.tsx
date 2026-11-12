@@ -94,7 +94,21 @@ function setup(over: Partial<{ [K in keyof ExpedienteApi]: ReturnType<typeof vi.
   (window as unknown as { fodiboExpediente: unknown }).fodiboExpediente = api;
 }
 
-function Harness({ initial, initialDoc, spy, pendingImport }: { initial?: string; initialDoc?: string; spy?: (id: string | undefined) => void; pendingImport?: { packageId: string; seq: number } }) {
+function Harness({
+  initial,
+  initialDoc,
+  spy,
+  pendingImport,
+  visible,
+  receivedCount,
+}: {
+  initial?: string;
+  initialDoc?: string;
+  spy?: (id: string | undefined) => void;
+  pendingImport?: { packageId: string; seq: number };
+  visible?: boolean;
+  receivedCount?: number;
+}) {
   const [id, setId] = useState<string | undefined>(initial);
   const [docId, setDocId] = useState<string | undefined>(initialDoc);
   return (
@@ -107,9 +121,16 @@ function Harness({ initial, initialDoc, spy, pendingImport }: { initial?: string
       selectedDocumentId={docId}
       onSelectDocument={setDocId}
       pendingImport={pendingImport}
+      visible={visible}
+      receivedCount={receivedCount}
     />
   );
 }
+
+const CASE2 = '4a2b8c1e-5a4d-4e6f-9a1b-2c3d4e5f6a7c';
+const summary = (caseId: string) => ({ caseId, taxYear: 2025, jurisdiction: 'ZH', revision: 1, createdAt: '', hauptpersonLabel: 'X' });
+const approvedView = (over: Partial<CaseView> = {}) =>
+  view({ status: 'aprobado', lastApproval: { approvalId: 'x', caseRevision: 3, approvedAt: '2026-11-12T10:00:00.000Z', contentHash: 'abcdef0123456789' }, ...over });
 
 beforeEach(() => {
   localStorage.clear();
@@ -254,9 +275,7 @@ describe('Expediente', () => {
   });
 
   it('una respuesta tardía del expediente anterior no pisa la vista del nuevo', async () => {
-    const CASE2 = '4a2b8c1e-5a4d-4e6f-9a1b-2c3d4e5f6a7c';
     let releaseOld: (r: Result<CaseView>) => void = () => {};
-    const summary = (caseId: string) => ({ caseId, taxYear: 2025, jurisdiction: 'ZH', revision: 1, createdAt: '', hauptpersonLabel: 'X' });
     setup({
       listCases: vi.fn(async () => ok([summary(CASE), summary(CASE2)])),
       getCase: vi.fn((id: string) => (id === CASE ? new Promise<Result<CaseView>>((res) => (releaseOld = res)) : Promise.resolve(ok(view({ caseId: CASE2, revision: 7 }))))),
@@ -269,6 +288,96 @@ describe('Expediente', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.getByText('Revisión 7')).toBeTruthy();
     expect(screen.queryByText('Revisión 3')).toBeNull();
+  });
+
+  it('cambiar de expediente con el aviso de anulación abierto no escribe nada y muestra el nuevo', async () => {
+    setup({
+      listCases: vi.fn(async () => ok([summary(CASE), summary(CASE2)])),
+      getCase: vi.fn(async (id: string) => ok(id === CASE ? approvedView() : view({ caseId: CASE2, revision: 7 }))),
+    });
+    render(<Harness initial={CASE} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reabrir' }));
+    const alert = await screen.findByRole('alertdialog');
+    // Mientras el aviso está abierto, el resto de la pestaña es inerte (no alcanzable con el teclado).
+    expect(screen.getByLabelText('Expediente').closest('[inert]')).not.toBeNull();
+    expect(alert.closest('[inert]')).toBeNull();
+    // Si aun así se cambia de expediente, el aviso se cancela.
+    fireEvent.change(screen.getByLabelText('Expediente'), { target: { value: CASE2 } });
+    expect(await screen.findByText('Revisión 7')).toBeTruthy();
+    const stale = screen.queryByRole('alertdialog');
+    if (stale) fireEvent.click(within(stale).getByRole('button', { name: 'Continuar' }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(api.setDocument).not.toHaveBeenCalled();
+    expect(api.saveField).not.toHaveBeenCalled();
+    expect(api.approve).not.toHaveBeenCalled();
+    expect(screen.getByText('Revisión 7')).toBeTruthy();
+    expect(screen.getByLabelText('Expediente').closest('[inert]')).toBeNull();
+  });
+
+  it('un segundo aviso cancela el primero: solo se ejecuta la última acción confirmada', async () => {
+    setup({ getCase: vi.fn(async () => ok(approvedView())) });
+    const { rerender } = render(<Harness initial={CASE} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reabrir' }));
+    await screen.findByRole('alertdialog');
+    rerender(<Harness initial={CASE} pendingImport={{ packageId: PKG, seq: 1 }} />);
+    await waitFor(() => expect(screen.getAllByRole('alertdialog')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Continuar' }));
+    await waitFor(() => expect(api.importPackage).toHaveBeenCalledWith(CASE, PKG));
+    expect(api.setDocument).not.toHaveBeenCalled();
+  });
+
+  it('con la vista aún cargando, una importación sobre un expediente aprobado consulta el estado y avisa', async () => {
+    let first = true;
+    let releaseFirst: (r: Result<CaseView>) => void = () => {};
+    setup({
+      getCase: vi.fn(() => {
+        if (!first) return Promise.resolve(ok(approvedView()));
+        first = false;
+        return new Promise<Result<CaseView>>((res) => (releaseFirst = res));
+      }),
+    });
+    const { rerender } = render(<Harness initial={CASE} />);
+    await waitFor(() => expect(api.getCase).toHaveBeenCalledTimes(1));
+    rerender(<Harness initial={CASE} pendingImport={{ packageId: PKG, seq: 1 }} />);
+    expect((await screen.findByRole('alertdialog')).textContent).toMatch(/anula la aprobación/);
+    expect(api.importPackage).not.toHaveBeenCalled();
+    releaseFirst(ok(approvedView()));
+  });
+
+  it('una respuesta de escritura con la vista de otro expediente no se aplica', async () => {
+    setup({ setDocument: vi.fn(async () => ok(view({ caseId: CASE2, revision: 9 }))) });
+    render(<Harness initial={CASE} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reabrir' }));
+    await waitFor(() => expect(api.setDocument).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText('Revisión 9')).toBeNull();
+    expect(screen.getByText('Revisión 3')).toBeTruthy();
+  });
+
+  it('«Paquetes sin importar» se recarga al mostrarse la pestaña y al llegar un paquete', async () => {
+    const pkg = { packageId: PKG, deviceName: 'Pixel 8', receivedAt: '2026-11-10T15:30:00.000Z', fileCount: 2 };
+    let list: (typeof pkg)[] = [];
+    setup({ listImportable: vi.fn(async () => ok(list)) });
+    const { rerender } = render(<Harness initial={CASE} visible={false} receivedCount={0} />);
+    await screen.findByText('Revisión 3');
+    expect(api.listImportable).not.toHaveBeenCalled();
+    rerender(<Harness initial={CASE} visible receivedCount={0} />);
+    await waitFor(() => expect(api.listImportable).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('No hay paquetes pendientes.')).toBeTruthy();
+    list = [pkg];
+    rerender(<Harness initial={CASE} visible receivedCount={1} />);
+    expect(await screen.findByRole('button', { name: /Importar paquete de Pixel 8/ })).toBeTruthy();
+    expect(api.listImportable).toHaveBeenCalledTimes(2);
+  });
+
+  it('un storage_error muestra la ruta de la última copia de seguridad', async () => {
+    const backup = '/datos/expediente/backups/2026-11-11.db';
+    setup({ listCases: vi.fn(async () => fail('storage_error', 'No se pudo abrir el expediente.', { backup })) });
+    render(<Harness initial={CASE} />);
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('No se pudo abrir el expediente.');
+    expect(alert.textContent).toContain(backup);
   });
 
   it('pulsar una evidencia selecciona su documento y su página', async () => {

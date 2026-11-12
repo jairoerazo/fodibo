@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CaseView, ConceptView, FieldHistoryEntry, Result } from '../../../shared/expediente-ipc.js';
-import { evidenceLabel, FIELD_STATUS_LABEL, formatValue, ORIGIN_LABEL, variantLabel } from './labels.js';
+import { errorText, evidenceLabel, FIELD_STATUS_LABEL, formatValue, ORIGIN_LABEL, variantLabel } from './labels.js';
 
 type Field = CaseView['fields'][number];
 
@@ -31,7 +31,7 @@ export function FieldList({
   const toggleHistory = async (f: Field) => {
     if (history?.fieldId === f.fieldId) return setHistory(undefined);
     const r = await loadHistory(f.fieldId);
-    setHistory(r.ok ? { fieldId: f.fieldId, entries: r.value } : { fieldId: f.fieldId, error: r.error.message });
+    setHistory(r.ok ? { fieldId: f.fieldId, entries: r.value } : { fieldId: f.fieldId, error: errorText(r.error) });
   };
 
   return (

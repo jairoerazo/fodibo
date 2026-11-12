@@ -38,6 +38,8 @@ export function App() {
   const [selectedDocumentId, setSelectedDocumentId] = useState<string>();
   const [pendingImport, setPendingImport] = useState<{ packageId: string; seq: number }>();
   const [notice, setNotice] = useState<string>();
+  // Cuenta los paquetes llegados: la pestaña Expediente recarga con ello sus «Paquetes sin importar».
+  const [receivedCount, setReceivedCount] = useState(0);
 
   const selectCase = useCallback((id: string | undefined) => {
     setActiveCaseId(id);
@@ -57,6 +59,7 @@ export function App() {
       else if (e.type === 'error') setError(e.message);
       else {
         // Un paquete que llega tras `closed` también se muestra: el recibo ya está en disco.
+        setReceivedCount((n) => n + 1);
         setPackages((prev) =>
           prev.some((p) => p.receipt.package_id === e.pkg.receipt.package_id) ? prev : [e.pkg, ...prev],
         );
@@ -130,6 +133,8 @@ export function App() {
           onSelectDocument={setSelectedDocumentId}
           pendingImport={pendingImport}
           onImportResult={onImportResult}
+          visible={tab === 'expediente'}
+          receivedCount={receivedCount}
         />
       </div>
       <AgentPanel visible={tab === 'portal'} caseId={activeCaseId} />

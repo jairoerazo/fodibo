@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent } from 'react';
 import type { CaseView, ConceptView, FieldInput, Result } from '../../../shared/expediente-ipc.js';
+import { errorText } from './labels.js';
 
 type Field = CaseView['fields'][number];
 type EvRow = { documentId: string; page: string };
@@ -76,7 +77,7 @@ export function FieldForm({
     if (r.ok) return;
     const f = (r.error.details as { field?: string } | undefined)?.field;
     const key = f === 'moneda' ? 'valor' : f === 'conceptId' || f === 'variant' || f === 'evidence' || f === 'valor' ? f : 'form';
-    setErrors({ [key]: r.error.message });
+    setErrors({ [key]: errorText(r.error) });
   };
 
   const err = (key: string) => (errors[key] ? <p id={`${uid}-${key}`} className="field-error">{errors[key]}</p> : null);
