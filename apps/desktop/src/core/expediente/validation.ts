@@ -21,7 +21,7 @@ function normalizeAmount(raw: string): string {
   const m = AMOUNT_IN_RE.exec(raw.trim());
   if (!m) invalid('Importe no válido');
   const [, sign, int, dec = ''] = m as RegExpExecArray;
-  const digits = int.replace(/\D/g, '');
+  const digits = int.replace(/\D/g, '').replace(/^0+(?=\d)/, '');
   const out = `${digits}.${dec.padEnd(2, '0')}`;
   return sign && Number(out) !== 0 ? `-${out}` : out;
 }

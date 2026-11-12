@@ -2,7 +2,7 @@
   "name": "fodibo",
   "private": true,
   "workspaces": ["packages/*", "apps/desktop"],
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=22.13" },
   "scripts": { "test": "npm test --workspaces --if-present" },
   "devDependencies": {
     "ajv": "8.20.0",

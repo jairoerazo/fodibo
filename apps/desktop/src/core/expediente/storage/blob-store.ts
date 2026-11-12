@@ -90,7 +90,12 @@ export class BlobStore {
           head.push(part);
           headLen += part.length;
         }
-        await out.write(chunk);
+        // FileHandle.write puede escribir menos bytes sin lanzar: se repite hasta completar el trozo.
+        for (let off = 0; off < chunk.length; ) {
+          const { bytesWritten } = await out.write(chunk, off, chunk.length - off, null);
+          if (bytesWritten <= 0) throw new ExpedienteError('storage_error', 'No se pudo guardar el original.');
+          off += bytesWritten;
+        }
       }
 
       if (size !== expected.size || hash.digest('hex') !== expected.sha256) {
@@ -100,6 +105,10 @@ export class BlobStore {
         throw new ExpedienteError('integrity_error', 'El contenido del original no coincide con su tipo.');
       }
       await out.sync();
+      // Lo escrito en disco debe medir lo esperado antes de publicarlo bajo su hash.
+      if ((await out.stat()).size !== expected.size) {
+        throw new ExpedienteError('integrity_error', 'El original escrito no tiene el tamaño esperado.');
+      }
       await out.chmod(0o444);
       await out.close();
       out = undefined;

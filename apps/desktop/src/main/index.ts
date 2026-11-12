@@ -128,8 +128,13 @@ async function openExpediente(): Promise<void> {
   }
   expediente = opened;
   opened.on((e) => {
-    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(CASE_CHANNELS.event, e);
+    // Primero se detiene el relleno del agente; un fallo al avisar a la ventana no debe impedirlo.
     agent.onCaseChanged(e.caseId);
+    try {
+      if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(CASE_CHANNELS.event, e);
+    } catch (err) {
+      console.error(`[fodibo] expediente: aviso a la ventana fallido (${err instanceof Error ? err.name : 'error'})`);
+    }
   });
   registerDocProtocol(session.defaultSession, opened);
   registerExpedienteIpc(ipcMain, opened, { showItemInFolder: (p) => shell.showItemInFolder(p) });
