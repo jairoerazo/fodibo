@@ -317,7 +317,7 @@ describe('TransferService', () => {
     expect(events.filter((e) => e.type === 'package-received')).toHaveLength(1);
   });
 
-  it('(Foco 4) nombre "../../etc/passwd": se acepta y nada sale de inbox/<package_id>/', async () => {
+  it('(Foco 4) nombre "../../etc/passwd": se acepta y nada sale de inbox/<package_id>/; en originales/ queda limpio', async () => {
     await boot();
     const token = await pair();
     const m: Manifest = { ...three().m, files: [{ ...entry('../../etc/passwd', 'application/json', JSONB) }] };
@@ -330,7 +330,7 @@ describe('TransferService', () => {
       const rel = relative(dataDir, f).split(sep);
       const ok = rel[0] === 'tls' || (rel[0] === 'inbox' && rel[1] === m.package_id);
       expect(ok, f).toBe(true);
-      expect(f).not.toMatch(/passwd/);
+      if (/passwd/.test(f)) expect(rel.slice(2)).toEqual(['originales', 'passwd.json']);
     }
   });
 

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream as fsCreateWriteStream, type WriteStream } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { finished } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
@@ -38,6 +38,62 @@ async function writeAtomic(path: string, data: string): Promise<void> {
   const part = `${path}.${randomUUID()}.part`;
   await writeFile(part, data);
   await rename(part, path);
+}
+
+/** Extensiones aceptadas por tipo; la primera es la que se añade si falta. */
+const EXTENSIONS: Record<string, string[]> = {
+  'image/jpeg': ['jpg', 'jpeg'],
+  'image/png': ['png'],
+  'image/heic': ['heic', 'heif'],
+  'application/pdf': ['pdf'],
+  'application/json': ['json'],
+};
+const MAX_NAME_BYTES = 200;
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/**
+ * Nombre seguro para mostrar un archivo con su nombre original: sin rutas, sin caracteres de control ni
+ * separadores, sin puntos o espacios en los extremos, con la extensión del tipo ya verificado (un
+ * «x.command» declarado como PNG queda «x.command.png») y como mucho 200 bytes.
+ */
+export function originalName(name: string, mime: string): string {
+  const exts = EXTENSIONS[mime] ?? ['bin'];
+  let n = (name.normalize('NFC').split(/[\\/]/).pop() ?? '')
+    .replace(/[\u0000-\u001f\u007f:<>"|?*]/g, '_')
+    .replace(/^[\s.]+|[\s.]+$/g, '');
+  if (n === '') n = 'archivo';
+  const ext = /\.([^.]+)$/.exec(n)?.[1];
+  if (ext === undefined || !exts.includes(ext.toLowerCase())) n = `${n}.${exts[0]}`;
+  if (WINDOWS_RESERVED.test(n.split('.')[0]!)) n = `_${n}`;
+  return fitName(n);
+}
+
+function splitExt(n: string): [string, string] {
+  const i = n.lastIndexOf('.');
+  return i > 0 ? [n.slice(0, i), n.slice(i)] : [n, ''];
+}
+
+function fitName(n: string): string {
+  if (Buffer.byteLength(n) <= MAX_NAME_BYTES) return n;
+  const [stem, ext] = splitExt(n);
+  const chars = [...stem];
+  while (chars.length > 1 && Buffer.byteLength(chars.join('') + ext) > MAX_NAME_BYTES) chars.pop();
+  return chars.join('') + ext;
+}
+
+/** Nombres originales sin colisiones (sin distinguir mayúsculas): «foto (2).jpg», «foto (3).jpg»… */
+function uniqueNames(files: ManifestFile[]): string[] {
+  const used = new Set<string>();
+  return files.map((f) => {
+    const base = originalName(f.name, f.mime);
+    let n = base;
+    for (let k = 2; used.has(n.toLowerCase()); k++) {
+      const [stem, ext] = splitExt(base);
+      n = fitName(`${stem} (${k})${ext}`);
+    }
+    used.add(n.toLowerCase());
+    return n;
+  });
 }
 
 type Received = { sha256: string; bytes: number; head: Buffer };
@@ -248,7 +304,34 @@ export class Inbox {
       files: manifest.files.map((f) => ({ ...f, status: 'stored' as const })),
     };
     await writeAtomic(join(this.dir(packageId), 'receipt.json'), JSON.stringify(receipt));
+    await this.writeOriginals(manifest);
     return { pkg: { receipt, deviceName }, created: true };
+  }
+
+  /**
+   * Crea `originales/` con cada archivo del paquete con su nombre original (enlace duro al archivo por
+   * hash; copia si el sistema de archivos no admite enlaces). Es una comodidad para abrirlos desde el
+   * Finder: si falla, el paquete sigue completo y `cleanup` lo reintenta en el siguiente arranque.
+   */
+  private async writeOriginals(manifest: Manifest): Promise<void> {
+    const dir = this.dir(manifest.package_id);
+    const final = join(dir, 'originales');
+    if (await exists(final)) return;
+    const tmp = join(dir, `originales.${randomUUID()}.part`);
+    try {
+      await mkdir(tmp);
+      const names = uniqueNames(manifest.files);
+      for (const [i, f] of manifest.files.entries()) {
+        const src = join(dir, 'files', f.sha256);
+        const dst = join(tmp, names[i]!);
+        await link(src, dst).catch(() => copyFile(src, dst));
+      }
+      await rename(tmp, final);
+    } catch {
+      // comodidad, no parte del recibo: se reintenta en `cleanup`
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   }
 
   private async packageIds(): Promise<string[]> {
@@ -275,12 +358,16 @@ export class Inbox {
       const dir = join(this.root, id);
       const parts = async (d: string) => {
         for (const n of await readdir(d).catch(() => [] as string[])) {
-          if (n.endsWith('.part')) await rm(join(d, n), { force: true });
+          if (n.endsWith('.part')) await rm(join(d, n), { recursive: true, force: true });
         }
       };
       await parts(dir);
       await parts(join(dir, 'files'));
-      if (await exists(join(dir, 'receipt.json'))) continue;
+      if (await exists(join(dir, 'receipt.json'))) {
+        const manifest = await this.readManifest(id).catch(() => undefined);
+        if (manifest) await this.writeOriginals(manifest);
+        continue;
+      }
       const st = await stat(join(dir, 'manifest.json')).catch(() => undefined);
       if (st && this.now() - st.mtimeMs > STALE_MS) await rm(dir, { recursive: true, force: true });
     }

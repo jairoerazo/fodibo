@@ -7,7 +7,7 @@ import { createWriteStream, type WriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TransferError } from '../errors.js';
-import { Inbox } from '../inbox.js';
+import { Inbox, originalName } from '../inbox.js';
 import type { Manifest, ManifestFile } from '../types.js';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
@@ -331,5 +331,90 @@ describe('Inbox', () => {
     expect(await codeOf(inbox.fileEntry(m.package_id, 'f'.repeat(64)))).toBe('not_found');
     expect(await codeOf(inbox.fileEntry('../x', m.files[1].sha256))).toBe('not_found');
   });
+
+  describe('carpeta originales', () => {
+    async function complete(m: Manifest, bodies: Buffer[]) {
+      await inbox.announce(m);
+      for (const b of new Set(bodies)) await inbox.storeFile(m.package_id, sha(b), Readable.from([b]));
+      return inbox.commit(m.package_id);
+    }
+    const orig = (m: Manifest) => join(root, m.package_id, 'originales');
+
+    it('al completar el paquete, cada archivo aparece con su nombre original, como enlace duro', async () => {
+      const m = three();
+      await complete(m, [JPEG, PDF, JSONB]);
+      expect((await readdir(orig(m))).sort()).toEqual(['a.jpg', 'b.pdf', 'c.json']);
+      expect(await readFile(join(orig(m), 'b.pdf'))).toEqual(PDF);
+      const a = await stat(join(orig(m), 'a.jpg'));
+      const b = await stat(join(root, m.package_id, 'files', sha(JPEG)));
+      expect(a.ino).toBe(b.ino);
+    });
+
+    it('nombres repetidos (sin distinguir mayúsculas) se numeran', async () => {
+      const m = manifestOf([
+        entry('foto.jpg', 'image/jpeg', JPEG),
+        entry('FOTO.jpg', 'image/jpeg', JPEG),
+        entry('foto.jpg', 'image/jpeg', JPEG),
+      ]);
+      await complete(m, [JPEG, JPEG, JPEG]);
+      expect((await readdir(orig(m))).sort()).toEqual(['FOTO (2).jpg', 'foto (3).jpg', 'foto.jpg']);
+    });
+
+    it('un nombre con rutas no escribe fuera de la carpeta', async () => {
+      const m = manifestOf([entry('../../evil.pdf', 'application/pdf', PDF)]);
+      await complete(m, [PDF]);
+      expect(await readdir(orig(m))).toEqual(['evil.pdf']);
+      expect(existsSync(join(root, 'evil.pdf'))).toBe(false);
+    });
+
+    it('idempotente: un segundo commit no duplica nada', async () => {
+      const m = three();
+      await complete(m, [JPEG, PDF, JSONB]);
+      await inbox.commit(m.package_id);
+      expect(await readdir(orig(m))).toHaveLength(3);
+    });
+
+    it('cleanup crea la carpeta en paquetes recibidos antes de que existiera', async () => {
+      const m = three();
+      await complete(m, [JPEG, PDF, JSONB]);
+      await rm(orig(m), { recursive: true });
+      await inbox.cleanup();
+      expect((await readdir(orig(m))).sort()).toEqual(['a.jpg', 'b.pdf', 'c.json']);
+    });
+
+    it('cleanup borra una carpeta a medio crear y la rehace', async () => {
+      const m = three();
+      await complete(m, [JPEG, PDF, JSONB]);
+      await rm(orig(m), { recursive: true });
+      await mkdir(join(root, m.package_id, `originales.${randomUUID()}.part`));
+      await inbox.cleanup();
+      expect((await readdir(join(root, m.package_id))).filter((n) => n.endsWith('.part'))).toEqual([]);
+      expect(await readdir(orig(m))).toHaveLength(3);
+    });
+  });
 });
 
+describe('originalName', () => {
+  it('conserva un nombre normal', () => {
+    expect(originalName('Lohnausweis 2025.pdf', 'application/pdf')).toBe('Lohnausweis 2025.pdf');
+  });
+  it('quita rutas, caracteres de control y separadores', () => {
+    expect(originalName('a/b\\c:d\u0000e.pdf', 'application/pdf')).toBe('c_d_e.pdf');
+    expect(originalName('..', 'application/pdf')).toBe('archivo.pdf');
+    expect(originalName('   . ', 'image/jpeg')).toBe('archivo.jpg');
+  });
+  it('la extensión siempre corresponde al tipo verificado', () => {
+    expect(originalName('foto', 'image/jpeg')).toBe('foto.jpg');
+    expect(originalName('foto.JPEG', 'image/jpeg')).toBe('foto.JPEG');
+    expect(originalName('script.command', 'image/png')).toBe('script.command.png');
+    expect(originalName('IMG_1.HEIC', 'image/heic')).toBe('IMG_1.HEIC');
+  });
+  it('limita la longitud conservando la extensión', () => {
+    const n = originalName(`${'x'.repeat(400)}.pdf`, 'application/pdf');
+    expect(n.endsWith('.pdf')).toBe(true);
+    expect(Buffer.byteLength(n)).toBeLessThanOrEqual(200);
+  });
+  it('nombres reservados de Windows llevan un prefijo', () => {
+    expect(originalName('CON.json', 'application/json')).toBe('_CON.json');
+  });
+});
