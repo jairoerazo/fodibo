@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, readdir, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { chmod, lstat, mkdir, readdir, rename, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BlobStore } from '../blob-store.js';
@@ -116,5 +117,46 @@ describe('BlobStore', () => {
     await expect(store.has('../x')).rejects.toMatchObject({ code: 'invalid_input' });
     expect(() => store.pathOf('../x')).toThrowError(expect.objectContaining({ code: 'invalid_input' }));
     await expect(store.remove('../x')).rejects.toMatchObject({ code: 'invalid_input' });
+  });
+
+  it('origen sustituido por un enlace simbólico tras crearse: integrity_error', async () => {
+    const { root, store, source, hash, size } = await setup();
+    const other = join(root, 'other.bin');
+    await writeFile(other, PNG);
+    await rename(other, source); // sigue siendo archivo
+    const link = join(root, 'l2.bin');
+    await symlink(source, link);
+    await expect(store.put(link, { sha256: hash, size, mime: 'image/png' })).rejects.toMatchObject({ code: 'integrity_error' });
+  });
+
+  it('origen FIFO: integrity_error sin colgarse', async () => {
+    const { root, store, hash, size } = await setup();
+    const fifo = join(root, 'f.fifo');
+    execFileSync('mkfifo', [fifo]);
+    await expect(store.put(fifo, { sha256: hash, size, mime: 'image/png' })).rejects.toMatchObject({ code: 'integrity_error' });
+  });
+
+  it('origen de más tamaño que el esperado: integrity_error', async () => {
+    const { store, source, hash, size } = await setup();
+    await expect(store.put(source, { sha256: hash, size: size - 1, mime: 'image/png' })).rejects.toMatchObject({ code: 'integrity_error' });
+  });
+
+  it('puts concurrentes del mismo contenido no sobrescriben y tmp queda vacío', async () => {
+    const { store, source, hash, size } = await setup();
+    const exp = { sha256: hash, size, mime: 'image/png' as const };
+    await store.put(source, exp);
+    const before = await lstat(store.pathOf(hash));
+    await Promise.all([store.put(source, exp), store.put(source, exp)]);
+    const fresh = await setup();
+    const exp2 = { sha256: fresh.hash, size: fresh.size, mime: 'image/png' as const };
+    // mismo contenido, almacén nuevo: carrera real
+    await Promise.all([fresh.store.put(fresh.source, exp2), fresh.store.put(fresh.source, exp2), fresh.store.put(fresh.source, exp2)]);
+    const a = await lstat(fresh.store.pathOf(fresh.hash));
+    expect(a.mode & 0o777).toBe(0o444);
+    expect(a.nlink).toBe(1);
+    expect(await readdir(join(fresh.store.pathOf(fresh.hash), '..', '..', 'tmp'))).toEqual([]);
+    const after = await lstat(store.pathOf(hash));
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
   });
 });

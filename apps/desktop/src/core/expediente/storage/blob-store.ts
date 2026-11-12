@@ -1,9 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { chmod, lstat, mkdir, open as openFile, readdir, rename, rm } from 'node:fs/promises';
+import { constants, createReadStream } from 'node:fs';
+import { link, lstat, mkdir, open as openFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { sniffOk } from '../../transfer/sniff.js';
 import type { Mime } from '../../transfer/types.js';
 import { ExpedienteError } from '../errors.js';
@@ -55,35 +54,44 @@ export class BlobStore {
     this.check(expected.sha256);
     if (await this.has(expected.sha256)) return;
 
-    let st;
+    // Se abre sin seguir enlaces y se valida sobre el descriptor abierto (sin ventana entre comprobar y leer).
+    let src;
     try {
-      st = await lstat(source);
+      src = await openFile(source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     } catch {
       throw new ExpedienteError('integrity_error', 'El original de origen no es legible.');
     }
-    if (!st.isFile() || st.isSymbolicLink()) {
-      throw new ExpedienteError('integrity_error', 'El original de origen no es un archivo regular.');
-    }
-
     const tmpDir = join(this.dir, TMP_DIR);
-    await mkdir(tmpDir, { recursive: true });
     const tmp = join(tmpDir, `${randomUUID()}.part`);
-    const hash = createHash('sha256');
-    let size = 0;
-    const head: Buffer[] = [];
-    let headLen = 0;
+    let out;
     try {
-      const src = createReadStream(source, { flags: 'r' });
-      src.on('data', (chunk) => {
-        const buf = chunk as Buffer;
-        hash.update(buf);
-        size += buf.length;
-        if (headLen < 12) {
-          head.push(buf.subarray(0, 12 - headLen));
-          headLen += head[head.length - 1]!.length;
+      const st = await src.stat();
+      if (!st.isFile() || st.size !== expected.size) {
+        throw new ExpedienteError('integrity_error', 'El original de origen no es un archivo regular del tamaño esperado.');
+      }
+      await mkdir(tmpDir, { recursive: true });
+      out = await openFile(tmp, 'wx', 0o600);
+      const hash = createHash('sha256');
+      let size = 0;
+      const head: Buffer[] = [];
+      let headLen = 0;
+      const buf = Buffer.allocUnsafe(64 * 1024);
+      for (;;) {
+        const { bytesRead } = await src.read(buf, 0, buf.length, null);
+        if (bytesRead === 0) break;
+        size += bytesRead;
+        if (size > expected.size) {
+          throw new ExpedienteError('integrity_error', 'El original supera el tamaño esperado.');
         }
-      });
-      await pipeline(src, createWriteStream(tmp, { flags: 'wx', mode: 0o600 }));
+        const chunk = buf.subarray(0, bytesRead);
+        hash.update(chunk);
+        if (headLen < 12) {
+          const part = Buffer.from(chunk.subarray(0, 12 - headLen));
+          head.push(part);
+          headLen += part.length;
+        }
+        await out.write(chunk);
+      }
 
       if (size !== expected.size || hash.digest('hex') !== expected.sha256) {
         throw new ExpedienteError('integrity_error', 'El original no coincide con el hash o tamaño esperados.');
@@ -91,21 +99,27 @@ export class BlobStore {
       if (!sniffOk(expected.mime, Buffer.concat(head))) {
         throw new ExpedienteError('integrity_error', 'El contenido del original no coincide con su tipo.');
       }
+      await out.sync();
+      await out.chmod(0o444);
+      await out.close();
+      out = undefined;
 
-      const fh = await openFile(tmp, 'r');
-      try {
-        await fh.sync();
-      } finally {
-        await fh.close();
-      }
       const final = this.pathOf(expected.sha256);
       await mkdir(join(this.dir, expected.sha256.slice(0, 2)), { recursive: true });
-      await rename(tmp, final);
-      await chmod(final, 0o444);
-    } catch (e) {
+      // link no reemplaza: si otro put ganó la carrera, el blob existente se conserva.
+      try {
+        await link(tmp, final);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      }
       await rm(tmp, { force: true });
+    } catch (e) {
+      await out?.close().catch(() => {});
+      await rm(tmp, { force: true }).catch(() => {});
       if (e instanceof ExpedienteError) throw e;
       throw new ExpedienteError('storage_error', 'No se pudo guardar el original.');
+    } finally {
+      await src.close().catch(() => {});
     }
   }
 
