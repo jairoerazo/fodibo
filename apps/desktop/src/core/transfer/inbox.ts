@@ -70,11 +70,10 @@ function fitName(n: string): string {
   return chars.join('') + ext;
 }
 
-/** Nombres originales sin colisiones (sin distinguir mayúsculas): «foto (2).jpg», «foto (3).jpg»… */
-function uniqueNames(files: ManifestFile[]): string[] {
+/** Resuelve colisiones (sin distinguir mayúsculas) de nombres ya saneados: «foto (2).jpg», «foto (3).jpg»… */
+export function dedupeNames(bases: string[]): string[] {
   const used = new Set<string>();
-  return files.map((f) => {
-    const base = originalName(f.name, f.mime);
+  return bases.map((base) => {
     let n = base;
     for (let k = 2; used.has(n.toLowerCase()); k++) {
       const [stem, ext] = splitExt(base);
@@ -83,6 +82,11 @@ function uniqueNames(files: ManifestFile[]): string[] {
     used.add(n.toLowerCase());
     return n;
   });
+}
+
+/** Nombres originales sin colisiones (sin distinguir mayúsculas): «foto (2).jpg», «foto (3).jpg»… */
+function uniqueNames(files: ManifestFile[]): string[] {
+  return dedupeNames(files.map((f) => originalName(f.name, f.mime)));
 }
 
 type Received = { sha256: string; bytes: number; head: Buffer };

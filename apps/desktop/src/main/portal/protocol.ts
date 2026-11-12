@@ -5,6 +5,7 @@
 import { protocol, session as electronSession, type Session } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
+import { DOC_SCHEME } from '../doc-protocol.js';
 import { extname, join, resolve, sep } from 'node:path';
 
 export const PORTAL_SCHEME = 'fodibo-portal';
@@ -22,9 +23,15 @@ export function portalRoot(): string {
   return resolve(import.meta.dirname, '../test-portal');
 }
 
-/** Debe llamarse antes de `app.ready`. */
+/**
+ * Debe llamarse antes de `app.ready`. Electron admite una sola llamada a `registerSchemesAsPrivileged`,
+ * así que aquí se declaran todos los esquemas propios (portal y `fodibo-doc:` del visor de documentos).
+ */
 export function registerPortalScheme(): void {
-  protocol.registerSchemesAsPrivileged([{ scheme: PORTAL_SCHEME, privileges: { standard: true, secure: true } }]);
+  protocol.registerSchemesAsPrivileged([
+    { scheme: PORTAL_SCHEME, privileges: { standard: true, secure: true } },
+    { scheme: DOC_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  ]);
 }
 
 /** Últimas peticiones canceladas por sesión (diagnóstico y self-test). */

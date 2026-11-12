@@ -40,6 +40,8 @@ export interface CaseStore {
   insertImportFile(row: ImportFileRow): void;
   /** Archivos de un paquete importado en el orden en que se registraron, con el hash de su documento. */
   listImportFiles(packageId: string): Array<ImportFileRow & { sha256: string }>;
+  /** Primer archivo de paquete (por orden de registro) que originó el documento. */
+  firstImportFileOfDocument(documentId: string): ImportFileRow | undefined;
   insertDocument(row: DocumentRow): void;
   getDocumentBySha(caseId: string, sha256: string): DocumentRow | undefined;
   /** Hash y tamaño de todos los documentos de todos los expedientes (recuperación al arrancar). */
@@ -210,6 +212,9 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
     `SELECT f.package_id, f.file_id, f.document_id, f.name, d.sha256 FROM import_files f
      JOIN documents d ON d.document_id = f.document_id WHERE f.package_id = ? ORDER BY f.rowid`,
   );
+  const firstImportFileOfDocument = conn.prepare(
+    'SELECT package_id, file_id, document_id, name FROM import_files WHERE document_id = ? ORDER BY rowid LIMIT 1',
+  );
   const insertDocument = conn.prepare(
     `INSERT INTO documents (document_id, case_id, sha256, mime, size, original_name, doc_type, status, source_device, imported_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -325,6 +330,9 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
     },
     insertDocument(r) {
       insertDocument.run(r.document_id, r.case_id, r.sha256, r.mime, r.size, r.original_name, r.doc_type, r.status, r.source_device, r.imported_at);
+    },
+    firstImportFileOfDocument(documentId) {
+      return firstImportFileOfDocument.get(documentId) as ImportFileRow | undefined;
     },
     getDocumentBySha(caseId, sha256) {
       return getDocumentBySha.get(caseId, sha256) as DocumentRow | undefined;

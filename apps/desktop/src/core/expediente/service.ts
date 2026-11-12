@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { lstat } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
+import type { Readable } from 'node:stream';
 import { CONCEPTS, type Concept } from '../agent/index.js';
 import type { DeclType } from '../agent/types.js';
 import { ExpedienteError } from './errors.js';
@@ -19,6 +21,7 @@ import {
 import { importPackage, listImportable, recoverStore, type ImportContext, type ImportResult, type ImportablePackage, type RecoverResult } from './import.js';
 import { approve as approveTx, approvedDeclaration as approvedDeclarationTx, type ApprovalSummary, type ApprovedDeclaration } from './approval.js';
 import { caseStatus, type Blocker, type CaseStatus, type Warning } from './status.js';
+import { dedupeNames } from '../transfer/inbox.js';
 import { BlobStore, openStore, type CaseStore } from './storage/index.js';
 import {
   ACTOR_LOCAL,
@@ -121,6 +124,7 @@ export type ChangeEntry = {
   after: unknown;
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MIN_YEAR = 2000;
 const MAX_YEAR = 2100;
 const MAX_LABEL = 60;
@@ -276,6 +280,54 @@ export class ExpedienteService {
   /** Marca un original como no disponible tras una lectura fallida (lo llama el manejador del protocolo). */
   reportUnavailable(documentId: string): void {
     if (this.store.getDocument(documentId)) this.unreadable.add(documentId);
+  }
+
+  /**
+   * Abre un original para el visor (protocolo `fodibo-doc:`): comprueba el hash completo antes de entregar nada.
+   * Si falta el blob lo marca no disponible y lanza `not_found`; si no coincide, lo marca y lanza `integrity_error`.
+   * `open` admite un rango de bytes inclusivo ya resuelto contra `size`.
+   */
+  async openDocument(
+    documentId: string,
+  ): Promise<{ mime: string; size: number; open: (range?: { start: number; end: number }) => Promise<Readable> }> {
+    const doc = this.store.getDocument(documentId);
+    if (!doc) throw new ExpedienteError('not_found', 'Documento no encontrado.');
+    const check = await this.blobs.verify(doc.sha256);
+    if (!check.ok) {
+      this.reportUnavailable(documentId);
+      if (check.size === undefined) throw new ExpedienteError('not_found', 'El original no está en el almacén.');
+      throw new ExpedienteError('integrity_error', 'El original no supera la comprobación de integridad.');
+    }
+    if (check.size !== doc.size) {
+      this.reportUnavailable(documentId);
+      throw new ExpedienteError('integrity_error', 'El original no supera la comprobación de integridad.');
+    }
+    return { mime: doc.mime, size: doc.size, open: (range) => this.blobs.open(doc.sha256, range) };
+  }
+
+  /**
+   * Ruta que se enseña al usuario en el explorador de archivos: la copia con nombre original de
+   * `inbox/<package_id>/originales/` si existe (archivo regular dentro de `inbox/`); si no, el blob.
+   */
+  async documentLocation(documentId: string): Promise<string> {
+    const doc = this.store.getDocument(documentId);
+    if (!doc) throw new ExpedienteError('not_found', 'Documento no encontrado.');
+    const fallback = this.blobs.pathOf(doc.sha256);
+    const first = this.store.firstImportFileOfDocument(documentId);
+    if (!first || !UUID_RE.test(first.package_id)) return fallback;
+    const names = this.store.listImportFiles(first.package_id);
+    const unique = dedupeNames(names.map((f) => f.name));
+    const idx = names.findIndex((f) => f.file_id === first.file_id);
+    const name = unique[idx];
+    if (name === undefined) return fallback;
+    const root = resolve(this.inboxDir);
+    const path = resolve(root, first.package_id, 'originales', name);
+    if (!path.startsWith(root + sep)) return fallback;
+    try {
+      return (await lstat(path)).isFile() ? path : fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   close(): void {
