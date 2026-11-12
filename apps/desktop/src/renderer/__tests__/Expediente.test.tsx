@@ -88,7 +88,7 @@ function setup(over: Partial<{ [K in keyof ExpedienteApi]: ReturnType<typeof vi.
   (window as unknown as { fodiboExpediente: unknown }).fodiboExpediente = api;
 }
 
-function Harness({ initial, initialDoc, spy }: { initial?: string; initialDoc?: string; spy?: (id: string | undefined) => void }) {
+function Harness({ initial, initialDoc, spy, pendingImport }: { initial?: string; initialDoc?: string; spy?: (id: string | undefined) => void; pendingImport?: { packageId: string; seq: number } }) {
   const [id, setId] = useState<string | undefined>(initial);
   const [docId, setDocId] = useState<string | undefined>(initialDoc);
   return (
@@ -100,6 +100,7 @@ function Harness({ initial, initialDoc, spy }: { initial?: string; initialDoc?: 
       }}
       selectedDocumentId={docId}
       onSelectDocument={setDocId}
+      pendingImport={pendingImport}
     />
   );
 }
@@ -219,6 +220,49 @@ describe('Expediente', () => {
     expect(await screen.findByText('Revisión 4')).toBeTruthy();
     expect(screen.getByText('bank.pdf')).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('button', { name: /Importar paquete/ })).toBeNull());
+  });
+
+  it('una importación pedida desde otra pestaña sobre un expediente aprobado avisa antes y Cancelar no importa', async () => {
+    const approved = view({ status: 'aprobado', lastApproval: { approvalId: 'x', caseRevision: 3, approvedAt: '2026-11-12T10:00:00.000Z', contentHash: 'abcdef0123456789' } });
+    setup({ getCase: vi.fn(async () => ok(approved)) });
+    const { rerender } = render(<Harness initial={CASE} />);
+    await screen.findByText('Revisión 3');
+    rerender(<Harness initial={CASE} pendingImport={{ packageId: PKG, seq: 1 }} />);
+    const alert = await screen.findByRole('alertdialog');
+    expect(alert.textContent).toMatch(/anula la aprobación/);
+    fireEvent.click(within(alert).getByRole('button', { name: 'Cancelar' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(api.importPackage).not.toHaveBeenCalled();
+    rerender(<Harness initial={CASE} pendingImport={{ packageId: PKG, seq: 2 }} />);
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Continuar' }));
+    await waitFor(() => expect(api.importPackage).toHaveBeenCalledWith(CASE, PKG));
+  });
+
+  it('si listCases falla no se olvida el expediente recordado y se muestra el error', async () => {
+    setup({ listCases: vi.fn(async () => fail('storage_error', 'No se pudo leer la lista.')) });
+    const selected: Array<string | undefined> = [];
+    render(<Harness initial={CASE} spy={(c) => selected.push(c)} />);
+    expect((await screen.findByRole('alert')).textContent).toContain('No se pudo leer la lista.');
+    await waitFor(() => expect(api.getCase).toHaveBeenCalledWith(CASE));
+    expect(selected).toEqual([]);
+  });
+
+  it('una respuesta tardía del expediente anterior no pisa la vista del nuevo', async () => {
+    const CASE2 = '4a2b8c1e-5a4d-4e6f-9a1b-2c3d4e5f6a7c';
+    let releaseOld: (r: Result<CaseView>) => void = () => {};
+    const summary = (caseId: string) => ({ caseId, taxYear: 2025, jurisdiction: 'ZH', revision: 1, createdAt: '', hauptpersonLabel: 'X' });
+    setup({
+      listCases: vi.fn(async () => ok([summary(CASE), summary(CASE2)])),
+      getCase: vi.fn((id: string) => (id === CASE ? new Promise<Result<CaseView>>((res) => (releaseOld = res)) : Promise.resolve(ok(view({ caseId: CASE2, revision: 7 }))))),
+    });
+    render(<Harness initial={CASE} />);
+    await waitFor(() => expect(api.getCase).toHaveBeenCalledWith(CASE));
+    fireEvent.change(screen.getByLabelText('Expediente'), { target: { value: CASE2 } });
+    expect(await screen.findByText('Revisión 7')).toBeTruthy();
+    releaseOld(ok(view({ revision: 3 })));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByText('Revisión 7')).toBeTruthy();
+    expect(screen.queryByText('Revisión 3')).toBeNull();
   });
 
   it('pulsar una evidencia selecciona su documento y su página', async () => {

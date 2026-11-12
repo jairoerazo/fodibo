@@ -4,6 +4,7 @@ import { AgentPanel } from './components/AgentPanel.js';
 import { ExpedienteTab } from './components/expediente/ExpedienteTab.js';
 import { PackageList } from './components/PackageList.js';
 import { QrPanel } from './components/QrPanel.js';
+import type { ImportResult, Result } from '../shared/expediente-ipc.js';
 import { cleanIpcError } from './format.js';
 
 type View =
@@ -35,7 +36,7 @@ export function App() {
   const [tab, setTab] = useState<'recibir' | 'expediente' | 'portal'>('recibir');
   const [activeCaseId, setActiveCaseId] = useState<string | undefined>(readStoredCase);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string>();
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [pendingImport, setPendingImport] = useState<{ packageId: string; seq: number }>();
   const [notice, setNotice] = useState<string>();
 
   const selectCase = useCallback((id: string | undefined) => {
@@ -94,23 +95,18 @@ export function App() {
     window.fodibo.openPackage(id).catch((err: unknown) => setError(cleanIpcError(err)));
   }, []);
 
-  const importToCase = useCallback(
-    async (packageId: string) => {
-      if (!activeCaseId) return;
-      setNotice(undefined);
-      const r = await window.fodiboExpediente.importPackage(activeCaseId, packageId);
-      if (!r.ok) return setError(r.error.message);
-      setError(undefined);
-      const fresh = r.value.documents.filter((d) => d.outcome === 'nuevo').length;
-      setNotice(r.value.status === 'already_imported' ? 'Este paquete ya estaba importado.' : `Paquete importado: ${fresh} documento(s) nuevo(s).`);
-      setRefreshKey((k) => k + 1);
-      window.fodibo
-        .listReceived()
-        .then((list) => setPackages((prev) => [...prev.filter((p) => list.some((q) => q.receipt.package_id === p.receipt.package_id)), ...list.filter((q) => !prev.some((p) => p.receipt.package_id === q.receipt.package_id))]))
-        .catch((err: unknown) => setError(cleanIpcError(err)));
-    },
-    [activeCaseId],
-  );
+  // La importación la ejecuta ExpedienteTab (así pasa por la guarda de «anula la aprobación»); se muestra esa pestaña para que el aviso sea visible.
+  const importToCase = useCallback((packageId: string) => {
+    setNotice(undefined);
+    setError(undefined);
+    setPendingImport((p) => ({ packageId, seq: (p?.seq ?? 0) + 1 }));
+    setTab('expediente');
+  }, []);
+  const onImportResult = useCallback((r: Result<ImportResult>) => {
+    if (!r.ok) return setError(r.error.message);
+    const fresh = r.value.documents.filter((d) => d.outcome === 'nuevo').length;
+    setNotice(r.value.status === 'already_imported' ? 'Este paquete ya estaba importado.' : `Paquete importado: ${fresh} documento(s) nuevo(s).`);
+  }, []);
 
   return (
     <main className={tab === 'recibir' ? undefined : 'wide'}>
@@ -132,7 +128,8 @@ export function App() {
           onSelectCase={selectCase}
           selectedDocumentId={selectedDocumentId}
           onSelectDocument={setSelectedDocumentId}
-          refreshKey={refreshKey}
+          pendingImport={pendingImport}
+          onImportResult={onImportResult}
         />
       </div>
       <AgentPanel visible={tab === 'portal'} caseId={activeCaseId} />
@@ -169,7 +166,7 @@ export function App() {
       <PackageList
         packages={packages}
         onOpen={open}
-        onImport={(id) => void importToCase(id)}
+        onImport={importToCase}
         importHint={activeCaseId ? undefined : 'Selecciona o crea un expediente en la pestaña Expediente.'}
       />
       </div>

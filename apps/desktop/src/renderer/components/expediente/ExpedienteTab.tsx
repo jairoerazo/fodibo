@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CaseInput, CaseSummary, CaseView, ConceptView, DocumentPatch, FieldInput, ImportablePackage, Result } from '../../../shared/expediente-ipc.js';
+import type { CaseInput, CaseSummary, CaseView, ConceptView, DocumentPatch, FieldInput, ImportablePackage, ImportResult, Result } from '../../../shared/expediente-ipc.js';
 import { ApproveDialog } from './ApproveDialog.js';
 import { CaseHeader } from './CaseHeader.js';
 import { DocumentList } from './DocumentList.js';
@@ -18,16 +18,20 @@ export function ExpedienteTab({
   onSelectCase,
   selectedDocumentId,
   onSelectDocument,
-  refreshKey = 0,
+  pendingImport,
+  onImportResult,
 }: {
   caseId: string | undefined;
   onSelectCase: (caseId: string | undefined) => void;
   selectedDocumentId: string | undefined;
   onSelectDocument: (documentId: string | undefined) => void;
-  /** Súbelo para recargar (p. ej. tras importar desde la pestaña de paquetes recibidos). */
-  refreshKey?: number;
+  /** Importación pedida desde otra pestaña: pasa por la misma guarda de «anula la aprobación». `seq` distingue peticiones repetidas. */
+  pendingImport?: { packageId: string; seq: number };
+  onImportResult?: (r: Result<ImportResult>) => void;
 }) {
-  const [cases, setCases] = useState<CaseSummary[]>();
+  const [cases, setCases] = useState<CaseSummary[]>([]);
+  /** Solo 'ok' autoriza a concluir que un expediente recordado ya no existe; un fallo transitorio no debe borrarlo. */
+  const [casesState, setCasesState] = useState<'loading' | 'ok' | 'failed'>('loading');
   const [concepts, setConcepts] = useState<ConceptView[]>([]);
   const [importable, setImportable] = useState<ImportablePackage[]>([]);
   const [view, setView] = useState<CaseView>();
@@ -41,16 +45,26 @@ export function ExpedienteTab({
   viewRef.current = view;
   const caseIdRef = useRef(caseId);
   caseIdRef.current = caseId;
+  // Secuencia de peticiones sobre la vista: una respuesta solo se aplica si es de este expediente y más nueva que la última aplicada.
+  const seqRef = useRef(0);
+  const appliedRef = useRef(0);
+  const applyView = (id: string, seq: number, v: CaseView): boolean => {
+    if (id !== caseIdRef.current || seq <= appliedRef.current) return false;
+    appliedRef.current = seq;
+    setView(v);
+    return true;
+  };
   const api = () => window.fodiboExpediente;
 
   const loadCases = useCallback(async () => {
     const r = await api().listCases();
-    if (r.ok) setCases(r.value);
-    else {
-      setCases((prev) => prev ?? []);
+    if (r.ok) {
+      setCases(r.value);
+      setCasesState('ok');
+    } else {
+      setCasesState('failed');
       setError(r.error.message);
     }
-    return r.ok ? r.value : undefined;
   }, []);
   const loadImportable = useCallback(async () => {
     const r = await api().listImportable();
@@ -58,10 +72,12 @@ export function ExpedienteTab({
     else setError(r.error.message);
   }, []);
   const loadView = useCallback(async (id: string) => {
+    const seq = ++seqRef.current;
     const r = await api().getCase(id);
     if (id !== caseIdRef.current) return;
-    if (r.ok) setView(r.value);
+    if (r.ok) applyView(id, seq, r.value);
     else setError(r.error.message);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -75,18 +91,14 @@ export function ExpedienteTab({
     setView(undefined);
     setForm(undefined);
     setApprove(undefined);
-    if (!caseId || !cases) return;
-    if (!cases.some((c) => c.caseId === caseId)) onSelectCase(undefined);
+    // Lo que estuviera en vuelo para otro expediente queda obsoleto.
+    appliedRef.current = ++seqRef.current;
+    if (!caseId || casesState === 'loading') return;
+    if (casesState === 'ok' && !cases.some((c) => c.caseId === caseId)) onSelectCase(undefined);
     else void loadView(caseId);
-    // `cases` entra solo para saber si ya se cargó; recargar la lista no debe recargar la vista.
+    // La lista entra solo por su estado de carga; recargarla no debe recargar la vista.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [caseId, cases === undefined, refreshKey]);
-
-  useEffect(() => {
-    if (refreshKey === 0) return;
-    void loadCases();
-    void loadImportable();
-  }, [refreshKey, loadCases, loadImportable]);
+  }, [caseId, casesState === 'loading']);
 
   useEffect(
     () =>
@@ -103,9 +115,12 @@ export function ExpedienteTab({
 
   const mutate = async (call: () => Promise<Result<CaseView>>, quiet = false): Promise<Result<CaseView>> => {
     if (!(await guard())) return CANCELLED;
+    const id = caseIdRef.current;
+    const seq = ++seqRef.current;
     const r = await call();
+    if (id !== caseIdRef.current) return r;
     if (r.ok) {
-      setView(r.value);
+      applyView(id!, seq, r.value);
       setError(undefined);
     } else if (!quiet) setError(r.error.message);
     return r;
@@ -115,7 +130,6 @@ export function ExpedienteTab({
     const r = await api().createCase(input);
     if (r.ok) {
       await loadCases();
-      setView(r.value);
       setShowNew(false);
       setError(undefined);
       onSelectCase(r.value.caseId);
@@ -134,13 +148,25 @@ export function ExpedienteTab({
     void mutate(() => api().setDocument(d.documentId, patch));
   };
 
-  const importPackage = async (pkg: ImportablePackage) => {
-    if (!caseId || !(await guard())) return;
-    const r = await api().importPackage(caseId, pkg.packageId);
+  const importById = async (packageId: string) => {
+    const id = caseIdRef.current;
+    if (!id || !(await guard())) return;
+    const r = await api().importPackage(id, packageId);
+    onImportResult?.(r);
+    if (id !== caseIdRef.current) return;
     if (!r.ok) return setError(r.error.message);
     setError(undefined);
-    await Promise.all([loadView(caseId), loadImportable()]);
+    await Promise.all([loadView(id), loadImportable()]);
   };
+
+  // Importación pedida desde la pestaña de paquetes: misma guarda que las demás ediciones.
+  const handledImport = useRef(0);
+  useEffect(() => {
+    if (!pendingImport || pendingImport.seq === handledImport.current) return;
+    handledImport.current = pendingImport.seq;
+    void importById(pendingImport.packageId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingImport]);
 
   const saveField = (input: FieldInput) =>
     mutate(() => api().saveField(caseId!, input), true).then((r) => {
@@ -150,10 +176,13 @@ export function ExpedienteTab({
 
   const confirmApprove = async () => {
     if (!view || !caseId) return;
+    const id = caseId;
     setApprove({ busy: true });
-    const r = await api().approve(caseId, view.revision);
+    const r = await api().approve(id, view.revision);
+    if (id !== caseIdRef.current) return;
     // approve no emite case-changed (no sube la revisión): se refresca a mano.
-    await loadView(caseId);
+    await loadView(id);
+    if (id !== caseIdRef.current) return;
     if (r.ok) setApprove(undefined);
     else setApprove({ busy: false, error: r.error.message });
   };
@@ -238,7 +267,7 @@ export function ExpedienteTab({
                       <span className="meta">
                         {p.deviceName} · {new Date(p.receivedAt).toLocaleString('es')} · {p.fileCount} archivos
                       </span>
-                      <button type="button" onClick={() => void importPackage(p)}>{`Importar paquete de ${p.deviceName}`}</button>
+                      <button type="button" onClick={() => void importById(p.packageId)}>{`Importar paquete de ${p.deviceName}`}</button>
                     </li>
                   ))}
                 </ul>
