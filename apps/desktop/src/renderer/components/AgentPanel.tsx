@@ -127,6 +127,9 @@ export function AgentPanel({ visible }: { visible: boolean }) {
     setStep(undefined);
     setRunning(true);
     try {
+      // Abre el portal si aún no lo está (en el proceso principal es idempotente).
+      await window.fodiboAgent.openPortal();
+      setPortalOpen(true);
       await window.fodiboAgent.start();
     } catch (err) {
       setError(cleanIpcError(err));

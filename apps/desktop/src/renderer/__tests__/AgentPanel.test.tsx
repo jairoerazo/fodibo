@@ -47,8 +47,8 @@ describe('AgentPanel', () => {
     render(<AgentPanel visible />);
     const pending = [
       pend(2, 'Ingresos', 'Salario', 'ambiguo', [
-        { key: 'salario_bruto', valor: '85400.00' },
-        { key: 'salario_neto', valor: '74210.00' },
+        { key: 'bruttolohn_jahr', valor: '85400.00' },
+        { key: 'nettolohn_jahr', valor: '74210.00' },
       ]),
       pend(2, 'Ingresos', 'Bonus', 'sin_dato'),
       pend(4, 'Banco', 'IBAN', 'no_verificado'),
@@ -57,7 +57,7 @@ describe('AgentPanel', () => {
     expect(screen.getByText('Ingresos')).toBeTruthy();
     expect(screen.getAllByText(/Paso \d/)).toHaveLength(2);
     expect(screen.getByText(/Varios candidatos/)).toBeTruthy();
-    expect(screen.getByText(/salario_bruto: 85400\.00/)).toBeTruthy();
+    expect(screen.getByText(/bruttolohn_jahr: 85400\.00/)).toBeTruthy();
     expect(screen.getByText(/No hay dato en la declaración/)).toBeTruthy();
     expect(screen.getByText(/No se pudo verificar/)).toBeTruthy();
     expect(screen.getByText('Control entregado. Completa los pendientes, revisa y pulsa «Einreichen».')).toBeTruthy();
@@ -73,6 +73,33 @@ describe('AgentPanel', () => {
     render(<AgentPanel visible />);
     emit({ type: 'model', status: 'error', message: 'No se encontró el modelo. Define FODIBO_MODEL con la ruta al archivo .gguf.' });
     expect(screen.getByRole('alert').textContent).toContain('No se encontró el modelo');
+  });
+
+  it('«Iniciar agente» sin portal abierto lo abre antes de empezar', async () => {
+    const order: string[] = [];
+    api.openPortal = vi.fn(async () => {
+      order.push('open');
+    });
+    api.start = vi.fn(async () => {
+      order.push('start');
+    });
+    render(<AgentPanel visible />);
+    await act(async () => {
+      fireEvent.click(screen.getByText('Iniciar agente'));
+    });
+    expect(order).toEqual(['open', 'start']);
+  });
+
+  it('si abrir el portal falla, no inicia el agente y muestra el error', async () => {
+    api.openPortal = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'agent:open': Error: No se pudo abrir el portal: x");
+    });
+    render(<AgentPanel visible />);
+    await act(async () => {
+      fireEvent.click(screen.getByText('Iniciar agente'));
+    });
+    expect(api.start).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toContain('No se pudo abrir el portal: x');
   });
 
   it('«Iniciar agente» y un rechazo muestran el error limpio', async () => {
