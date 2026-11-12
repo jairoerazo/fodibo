@@ -8,6 +8,9 @@ const ZOOM_MAX = 300;
 const ZOOM_STEP = 25;
 const IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
+/** Solo el nombre del error: nunca mensajes, que podrían contener rutas o valores. */
+const errName = (err: unknown): string => (err instanceof Error ? err.name : 'error');
+
 const docUrl = (id: string): string => `fodibo-doc://doc/${id}`;
 
 function ZoomControl({ zoom, onZoom }: { zoom: number; onZoom: (z: number) => void }) {
@@ -50,12 +53,14 @@ function PdfView({ documentId, page }: { documentId: string; page?: number | und
         // Sin `isEvalSupported`: pdfjs-dist 5.7 ya no evalúa código; sin fuentes ni CMaps remotos.
         const { getDocument, GlobalWorkerOptions } = await import('pdfjs-dist');
         GlobalWorkerOptions.workerSrc = workerUrl;
-        const doc = await getDocument({ data, disableFontFace: true }).promise;
+        const doc = await getDocument({ data, disableFontFace: true, useWasm: false }).promise;
         if (cancelled) return void doc.destroy();
         loaded = doc;
         setPdf(doc);
-      } catch {
-        if (!cancelled) setError('No se pudo abrir el PDF.');
+      } catch (err) {
+        if (cancelled) return;
+        console.error('[fodibo] visor:', errName(err));
+        setError('No se pudo abrir el PDF.');
       }
     })();
     return () => {
@@ -70,6 +75,7 @@ function PdfView({ documentId, page }: { documentId: string; page?: number | und
   useEffect(() => {
     if (!pdf) return;
     let cancelled = false;
+    let task: { cancel: () => void } | undefined;
     void (async () => {
       try {
         const p = await pdf.getPage(shown);
@@ -79,13 +85,19 @@ function PdfView({ documentId, page }: { documentId: string; page?: number | und
         const viewport = p.getViewport({ scale: zoom / 100 });
         el.width = viewport.width;
         el.height = viewport.height;
-        await p.render({ canvasContext: ctx, viewport } as never).promise;
-      } catch {
-        if (!cancelled) setError('No se pudo dibujar la página.');
+        const t = p.render({ canvasContext: ctx, viewport } as never);
+        task = t;
+        await t.promise;
+      } catch (err) {
+        // Una renderización cancelada por un cambio de página o zoom no es un fallo.
+        if (cancelled || errName(err) === 'RenderingCancelledException') return;
+        console.error('[fodibo] visor:', errName(err));
+        setError('No se pudo dibujar la página.');
       }
     })();
     return () => {
       cancelled = true;
+      task?.cancel();
     };
   }, [pdf, shown, zoom]);
 
@@ -134,8 +146,10 @@ function JsonView({ documentId }: { documentId: string }) {
         const bytes = new Uint8Array(await res.arrayBuffer());
         const body = new TextDecoder().decode(bytes.subarray(0, MAX_TEXT_BYTES));
         if (!cancelled) setText({ body, truncated: bytes.length > MAX_TEXT_BYTES });
-      } catch {
-        if (!cancelled) setError(true);
+      } catch (err) {
+        if (cancelled) return;
+        console.error('[fodibo] visor:', errName(err));
+        setError(true);
       }
     })();
     return () => {

@@ -16,9 +16,10 @@ const ID = '11111111-1111-4111-8111-111111111111';
 const showDocumentInFolder = vi.fn(async () => ({ ok: true, value: undefined }));
 
 beforeEach(() => {
+  pdf.render.mockImplementation(() => ({ promise: Promise.resolve(), cancel: vi.fn() }));
   pdf.getPage.mockImplementation(async () => ({
     getViewport: ({ scale }: { scale: number }) => ({ width: 100 * scale, height: 140 * scale }),
-    render: pdf.render.mockReturnValue({ promise: Promise.resolve() }),
+    render: pdf.render,
   }));
   pdf.getDocument.mockImplementation(() => ({ promise: Promise.resolve({ numPages: 3, getPage: pdf.getPage, destroy: vi.fn() }) }));
   vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([37, 80, 68, 70]))));
@@ -37,7 +38,7 @@ describe('DocumentViewer', () => {
     await screen.findByText('Página 2 de 3');
     expect(fetch).toHaveBeenCalledWith(`fodibo-doc://doc/${ID}`);
     const opts = pdf.getDocument.mock.calls[0]![0] as Record<string, unknown>;
-    expect(opts).toMatchObject({ disableFontFace: true });
+    expect(opts).toMatchObject({ disableFontFace: true, useWasm: false });
     expect(opts.data).toBeInstanceOf(Uint8Array);
     expect(opts).not.toHaveProperty('standardFontDataUrl');
     expect(pdf.GlobalWorkerOptions.workerSrc).toBe('/assets/pdf.worker.min.mjs');
@@ -48,6 +49,21 @@ describe('DocumentViewer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Anterior' }));
     await screen.findByText('Página 2 de 3');
     await waitFor(() => expect(pdf.getPage).toHaveBeenLastCalledWith(2));
+  });
+
+  it('PDF: cambiar de página con un render en curso lo cancela y no muestra error', async () => {
+    const cancel = vi.fn();
+    let finish!: () => void;
+    pdf.render.mockReturnValueOnce({ promise: new Promise<void>((r) => (finish = r)), cancel });
+    render(<DocumentViewer document={{ documentId: ID, mime: 'application/pdf' }} />);
+    await screen.findByText('Página 1 de 3');
+    await waitFor(() => expect(pdf.render).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    finish();
+    await screen.findByText('Página 2 de 3');
+    await waitFor(() => expect(pdf.render).toHaveBeenCalledTimes(2));
+    expect(document.querySelector('.error')).toBeNull();
   });
 
   it('PDF: el zoom va de 50 % a 300 %', async () => {
