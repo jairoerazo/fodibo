@@ -9,3 +9,8 @@ declare global {
     fodiboExpediente: ExpedienteApi;
   }
 }
+
+declare module '*?url' {
+  const url: string;
+  export default url;
+}

@@ -12,7 +12,16 @@ export type DocServer = Pick<ExpedienteService, 'openDocument'>;
 const URL_RE = /^fodibo-doc:\/\/doc\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 const RANGE_RE = /^bytes=(\d*)-(\d*)$/;
 
-const SECURITY_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' } as const;
+// CORS: el origen del renderer (http://localhost:5173 en desarrollo, file:// empaquetado) difiere de fodibo-doc://doc,
+// así que `fetch` del visor exige estas cabeceras. `*` es aceptable: el esquema solo existe en la sesión de la
+// ventana principal y solo sirve identificadores validados contra la base de datos (no hay contenido de terceros
+// que pueda leerlo, y un origen file:// no se puede nombrar con exactitud).
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'Cache-Control': 'no-store',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
+} as const;
 const empty = (status: number, extra: Record<string, string> = {}): Response =>
   new Response(null, { status, headers: { ...SECURITY_HEADERS, ...extra } });
 

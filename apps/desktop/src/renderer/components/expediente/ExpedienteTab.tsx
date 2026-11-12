@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CaseInput, CaseSummary, CaseView, ConceptView, DocumentPatch, FieldInput, ImportablePackage, ImportResult, Result } from '../../../shared/expediente-ipc.js';
 import { ApproveDialog } from './ApproveDialog.js';
 import { CaseHeader } from './CaseHeader.js';
+import { DocumentViewer } from './DocumentViewer.js';
 import { DocumentList } from './DocumentList.js';
 import { FieldForm } from './FieldForm.js';
 import { FieldList } from './FieldList.js';
@@ -273,13 +274,15 @@ export function ExpedienteTab({
                 </ul>
               )}
             </section>
-            {/* Hueco del visor: la Tarea 13 lo sustituye por DocumentViewer({ document, page }). */}
             <section aria-label="Visor" className="col viewer-slot" data-testid="viewer-slot">
               {selectedDoc ? (
                 <>
                   <strong>{selectedDoc.originalName}</strong>
-                  <span>{page === 0 ? 'Documento completo' : `Página ${page}`}</span>
-                  <span className="meta">Vista previa en la siguiente versión</span>
+                  {selectedDoc.available ? (
+                    <DocumentViewer document={{ documentId: selectedDoc.documentId, mime: selectedDoc.mime }} page={page === 0 ? undefined : page} />
+                  ) : (
+                    <span className="error">Original no disponible</span>
+                  )}
                 </>
               ) : (
                 <span className="meta">Selecciona un documento.</span>

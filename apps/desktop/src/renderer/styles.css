@@ -66,3 +66,8 @@ button.link { border: 0; background: none; padding: 0; text-align: left; text-de
 .dialog table { border-collapse: collapse; }
 .dialog th, .dialog td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #8883; overflow-wrap: anywhere; }
 .history { font-size: 0.85rem; padding-left: 20px; margin: 4px 0; }
+
+.viewer { display: flex; flex-direction: column; gap: 8px; }
+.viewer-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.viewer canvas { max-width: none; border: 1px solid #8884; }
+.viewer pre { white-space: pre-wrap; word-break: break-word; margin: 0; }

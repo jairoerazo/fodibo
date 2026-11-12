@@ -7,6 +7,12 @@ import type { CaseView, ConceptView, ExpedienteApi, Result } from '../../shared/
 import { PackageCard } from '../components/PackageCard.js';
 import { ExpedienteTab } from '../components/expediente/ExpedienteTab.js';
 
+vi.mock('../components/expediente/DocumentViewer.js', () => ({
+  DocumentViewer: ({ document, page }: { document: { documentId: string; mime: string }; page?: number }) => (
+    <span>{`visor:${document.documentId}:${document.mime}:${page ?? '-'}`}</span>
+  ),
+}));
+
 const CASE = '3f2b8c1e-5a4d-4e6f-9a1b-2c3d4e5f6a7b';
 const DOC1 = '11111111-1111-4111-8111-111111111111';
 const DOC2 = '22222222-2222-4222-8222-222222222222';
@@ -270,8 +276,7 @@ describe('Expediente', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'lohn.pdf, página 1' }));
     const viewer = await screen.findByTestId('viewer-slot');
     expect(viewer.textContent).toContain('lohn.pdf');
-    expect(viewer.textContent).toContain('Página 1');
-    expect(viewer.textContent).toContain('Vista previa en la siguiente versión');
+    expect(viewer.textContent).toContain(`visor:${DOC1}:application/pdf:1`);
   });
 });
 

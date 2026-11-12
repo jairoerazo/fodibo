@@ -31,6 +31,15 @@ describe('serveDocument', () => {
     expect(Buffer.from(await r.arrayBuffer()).equals(PDF)).toBe(true);
   });
 
+  it('expone CORS para el renderer (200, 206, 404 y 409) con las cabeceras de rango visibles', async () => {
+    const { svc, url } = await setup();
+    const rs = [await serveDocument(svc, url, null), await serveDocument(svc, url, 'bytes=0-9'), await serveDocument(svc, 'fodibo-doc://doc/nope', null)];
+    for (const r of rs) {
+      expect(r.headers.get('access-control-allow-origin')).toBe('*');
+      expect(r.headers.get('access-control-expose-headers')).toBe('Content-Range, Accept-Ranges, Content-Length');
+    }
+  });
+
   it('Range bytes=0-9 da 206 con 10 bytes y Content-Range', async () => {
     const { svc, url } = await setup();
     const r = await serveDocument(svc, url, 'bytes=0-9');

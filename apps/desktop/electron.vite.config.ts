@@ -3,7 +3,8 @@ import { defineConfig } from 'electron-vite';
 import { cpSync, rmSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 
-const CSP = "default-src 'self'; img-src 'self' data:";
+const CSP =
+  "default-src 'self'; script-src 'self'; img-src 'self' data: fodibo-doc:; connect-src 'self' fodibo-doc:; worker-src 'self'; object-src 'none'; base-uri 'none'";
 
 /** Copia el portal de prueba a `out/test-portal` (sin sus pruebas); el proceso principal lo sirve desde ahí. */
 const copyTestPortal = {

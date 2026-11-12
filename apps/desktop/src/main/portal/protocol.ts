@@ -30,7 +30,7 @@ export function portalRoot(): string {
 export function registerPortalScheme(): void {
   protocol.registerSchemesAsPrivileged([
     { scheme: PORTAL_SCHEME, privileges: { standard: true, secure: true } },
-    { scheme: DOC_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+    { scheme: DOC_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
   ]);
 }
 
