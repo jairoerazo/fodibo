@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ExpedienteError } from '../errors.js';
-import type { CaseRow } from '../types.js';
+import type { CaseRow, ChangeRow, PersonRow } from '../types.js';
 import { MIGRATIONS, type Migration } from './schema.js';
 
 export type OpenStoreOptions = {
@@ -19,6 +19,22 @@ export interface CaseStore {
   transaction<T>(fn: () => T): T;
   insertCase(row: CaseRow): void;
   getCase(caseId: string): CaseRow | undefined;
+  /** Expedientes con el rótulo de su titular, del más antiguo al más reciente. */
+  listCaseSummaries(): Array<CaseRow & { hauptperson_label: string | null }>;
+  updateCaseHeader(caseId: string, taxYear: number, jurisdiction: string): void;
+  /** Suma 1 a la revisión del expediente y devuelve la nueva. Solo dentro de una transacción. */
+  incrementRevision(caseId: string): number;
+  insertChange(row: Omit<ChangeRow, 'change_id'>): void;
+  listChanges(caseId: string): ChangeRow[];
+  insertPerson(row: PersonRow): void;
+  deletePerson(personId: string): void;
+  updatePersonLabel(personId: string, label: string): void;
+  /** Titular, pareja e hijos por ordinal. */
+  listPersons(caseId: string): PersonRow[];
+  /** Mayor ordinal de `kind` usado jamás en el expediente (también por personas dadas de baja; sale de `changes`). 0 si no hubo ninguno. */
+  maxKindOrdinal(caseId: string): number;
+  /** Campos del expediente cuya variante es el `slug` dado. */
+  fieldIdsWithVariant(caseId: string, slug: string): string[];
   close(): void;
 }
 
@@ -126,6 +142,29 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
   );
   const getCase = conn.prepare('SELECT * FROM cases WHERE case_id = ?');
 
+  const listCaseSummaries = conn.prepare(
+    `SELECT c.*, (SELECT p.label FROM persons p WHERE p.case_id = c.case_id AND p.role = 'hauptperson') AS hauptperson_label
+     FROM cases c ORDER BY c.created_at, c.case_id`,
+  );
+  const updateCaseHeader = conn.prepare('UPDATE cases SET tax_year = ?, jurisdiction = ? WHERE case_id = ?');
+  const incrementRevision = conn.prepare('UPDATE cases SET revision = revision + 1 WHERE case_id = ? RETURNING revision');
+  const insertChange = conn.prepare(
+    'INSERT INTO changes (case_id, revision, at, actor, entity, entity_id, action, before, after) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  const listChanges = conn.prepare('SELECT * FROM changes WHERE case_id = ? ORDER BY change_id');
+  const insertPerson = conn.prepare('INSERT INTO persons (person_id, case_id, role, ordinal, slug, label) VALUES (?, ?, ?, ?, ?, ?)');
+  const deletePerson = conn.prepare('DELETE FROM persons WHERE person_id = ?');
+  const updatePersonLabel = conn.prepare('UPDATE persons SET label = ? WHERE person_id = ?');
+  const listPersons = conn.prepare(
+    `SELECT * FROM persons WHERE case_id = ?
+     ORDER BY CASE role WHEN 'hauptperson' THEN 0 WHEN 'partner' THEN 1 ELSE 2 END, ordinal`,
+  );
+  const maxKindOrdinal = conn.prepare(
+    `SELECT COALESCE(MAX(json_extract(after, '$.ordinal')), 0) AS n FROM changes
+     WHERE case_id = ? AND entity = 'person' AND action = 'create' AND json_extract(after, '$.role') = 'kind'`,
+  );
+  const fieldIdsWithVariant = conn.prepare('SELECT field_id FROM fields WHERE case_id = ? AND variant = ? ORDER BY field_id');
+
   return {
     transaction<T>(fn: () => T): T {
       try {
@@ -153,6 +192,41 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
     },
     getCase(caseId) {
       return getCase.get(caseId) as CaseRow | undefined;
+    },
+    listCaseSummaries() {
+      return listCaseSummaries.all() as Array<CaseRow & { hauptperson_label: string | null }>;
+    },
+    updateCaseHeader(caseId, taxYear, jurisdiction) {
+      updateCaseHeader.run(taxYear, jurisdiction, caseId);
+    },
+    incrementRevision(caseId) {
+      const row = incrementRevision.get(caseId) as { revision: number } | undefined;
+      if (!row) throw new ExpedienteError('not_found', 'Expediente no encontrado.');
+      return row.revision;
+    },
+    insertChange(r) {
+      insertChange.run(r.case_id, r.revision, r.at, r.actor, r.entity, r.entity_id, r.action, r.before, r.after);
+    },
+    listChanges(caseId) {
+      return listChanges.all(caseId) as ChangeRow[];
+    },
+    insertPerson(r) {
+      insertPerson.run(r.person_id, r.case_id, r.role, r.ordinal, r.slug, r.label);
+    },
+    deletePerson(personId) {
+      deletePerson.run(personId);
+    },
+    updatePersonLabel(personId, label) {
+      updatePersonLabel.run(label, personId);
+    },
+    listPersons(caseId) {
+      return listPersons.all(caseId) as PersonRow[];
+    },
+    maxKindOrdinal(caseId) {
+      return (maxKindOrdinal.get(caseId) as { n: number }).n;
+    },
+    fieldIdsWithVariant(caseId, slug) {
+      return (fieldIdsWithVariant.all(caseId, slug) as Array<{ field_id: string }>).map((r) => r.field_id);
     },
     close() {
       conn.close();
