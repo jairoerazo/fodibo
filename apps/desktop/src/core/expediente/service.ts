@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CONCEPTS, type Concept } from '../agent/index.js';
 import { ExpedienteError } from './errors.js';
+import { importPackage, listImportable, recoverStore, type ImportContext, type ImportResult, type ImportablePackage, type RecoverResult } from './import.js';
 import { BlobStore, openStore, type CaseStore } from './storage/index.js';
 import { ACTOR_LOCAL, CANTONS, PERSON_ROLES, type Canton, type ChangeEntity, type PersonRole, type PersonRow } from './types.js';
 
@@ -79,6 +80,8 @@ export class ExpedienteService {
   private listeners = new Set<(e: ExpedienteEvent) => void>();
   private pending: ExpedienteEvent[] = [];
   private queue: Promise<unknown> = Promise.resolve();
+  /** Documentos cuyo blob falta o tiene otro tamaño, según la última `recover()`; lo consume la Tarea 9. */
+  protected missing = new Set<string>();
 
   private constructor(
     protected readonly store: CaseStore,
@@ -103,8 +106,36 @@ export class ExpedienteService {
     return svc;
   }
 
-  /** Punto de enganche de la Tarea 7 (recuperación de importaciones interrumpidas). Aquí no hace nada. */
-  private async recover(): Promise<void> {}
+  private importContext(): ImportContext {
+    return {
+      store: this.store,
+      blobs: this.blobs,
+      inboxDir: this.inboxDir,
+      now: this.now,
+      hooks: this.hooks,
+      transact: (fn) => this.transact(fn),
+      commitChange: (caseId, entries) => this.commitChange(caseId, entries),
+    };
+  }
+
+  /** Paquetes recibidos en `inbox/` con recibo y todavía sin importar, del más reciente al más antiguo. */
+  listImportable(): Promise<ImportablePackage[]> {
+    return listImportable(this.importContext());
+  }
+
+  /** Importa el paquete al expediente de forma idempotente (spec §9); las llamadas se serializan. */
+  importPackage(caseId: string, packageId: string): Promise<ImportResult> {
+    return this.enqueue(() => importPackage(this.importContext(), caseId, packageId));
+  }
+
+  /** Borra temporales y blobs huérfanos y anota los documentos sin su original (spec §9, recuperación). */
+  recover(): Promise<RecoverResult> {
+    return this.enqueue(async () => {
+      const result = await recoverStore(this.importContext());
+      this.missing = new Set(result.missing);
+      return result;
+    });
+  }
 
   close(): void {
     this.listeners.clear();

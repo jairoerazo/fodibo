@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ExpedienteError } from '../errors.js';
-import type { CaseRow, ChangeRow, PersonRow } from '../types.js';
+import type { CaseRow, ChangeRow, DocumentRow, ImportFileRow, ImportRow, PersonRow } from '../types.js';
 import { MIGRATIONS, type Migration } from './schema.js';
 
 export type OpenStoreOptions = {
@@ -35,6 +35,15 @@ export interface CaseStore {
   maxKindOrdinal(caseId: string): number;
   /** Campos del expediente cuya variante es el `slug` dado. */
   fieldIdsWithVariant(caseId: string, slug: string): string[];
+  getImport(packageId: string): ImportRow | undefined;
+  insertImport(row: ImportRow): void;
+  insertImportFile(row: ImportFileRow): void;
+  /** Archivos de un paquete importado en el orden en que se registraron, con el hash de su documento. */
+  listImportFiles(packageId: string): Array<ImportFileRow & { sha256: string }>;
+  insertDocument(row: DocumentRow): void;
+  getDocumentBySha(caseId: string, sha256: string): DocumentRow | undefined;
+  /** Hash y tamaño de todos los documentos de todos los expedientes (recuperación al arrancar). */
+  listDocumentBlobs(): Array<{ document_id: string; sha256: string; size: number }>;
   close(): void;
 }
 
@@ -165,6 +174,20 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
   );
   const fieldIdsWithVariant = conn.prepare('SELECT field_id FROM fields WHERE case_id = ? AND variant = ? ORDER BY field_id');
 
+  const getImport = conn.prepare('SELECT * FROM imports WHERE package_id = ?');
+  const insertImport = conn.prepare('INSERT INTO imports (package_id, case_id, imported_at, device_name, manifest_sha256) VALUES (?, ?, ?, ?, ?)');
+  const insertImportFile = conn.prepare('INSERT INTO import_files (package_id, file_id, document_id, name) VALUES (?, ?, ?, ?)');
+  const listImportFiles = conn.prepare(
+    `SELECT f.package_id, f.file_id, f.document_id, f.name, d.sha256 FROM import_files f
+     JOIN documents d ON d.document_id = f.document_id WHERE f.package_id = ? ORDER BY f.rowid`,
+  );
+  const insertDocument = conn.prepare(
+    `INSERT INTO documents (document_id, case_id, sha256, mime, size, original_name, doc_type, status, source_device, imported_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const getDocumentBySha = conn.prepare('SELECT * FROM documents WHERE case_id = ? AND sha256 = ?');
+  const listDocumentBlobs = conn.prepare('SELECT document_id, sha256, size FROM documents ORDER BY document_id');
+
   return {
     transaction<T>(fn: () => T): T {
       try {
@@ -227,6 +250,27 @@ export function openStore(opts: OpenStoreOptions): CaseStore {
     },
     fieldIdsWithVariant(caseId, slug) {
       return (fieldIdsWithVariant.all(caseId, slug) as Array<{ field_id: string }>).map((r) => r.field_id);
+    },
+    getImport(packageId) {
+      return getImport.get(packageId) as ImportRow | undefined;
+    },
+    insertImport(r) {
+      insertImport.run(r.package_id, r.case_id, r.imported_at, r.device_name, r.manifest_sha256);
+    },
+    insertImportFile(r) {
+      insertImportFile.run(r.package_id, r.file_id, r.document_id, r.name);
+    },
+    listImportFiles(packageId) {
+      return listImportFiles.all(packageId) as Array<ImportFileRow & { sha256: string }>;
+    },
+    insertDocument(r) {
+      insertDocument.run(r.document_id, r.case_id, r.sha256, r.mime, r.size, r.original_name, r.doc_type, r.status, r.source_device, r.imported_at);
+    },
+    getDocumentBySha(caseId, sha256) {
+      return getDocumentBySha.get(caseId, sha256) as DocumentRow | undefined;
+    },
+    listDocumentBlobs() {
+      return listDocumentBlobs.all() as Array<{ document_id: string; sha256: string; size: number }>;
     },
     close() {
       conn.close();

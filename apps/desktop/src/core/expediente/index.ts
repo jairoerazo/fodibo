@@ -10,3 +10,4 @@ export type {
   PersonView,
 } from './service.js';
 export { ExpedienteError, type ExpedienteErrorCode } from './errors.js';
+export type { ImportResult, ImportablePackage, RecoverResult } from './import.js';

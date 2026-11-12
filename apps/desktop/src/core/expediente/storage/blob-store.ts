@@ -176,16 +176,18 @@ export class BlobStore {
     return out.sort();
   }
 
-  /** Borra los temporales `.part` que haya dejado una interrupción. */
-  async cleanTmp(): Promise<void> {
+  /** Borra los temporales `.part` que haya dejado una interrupción y devuelve cuántos. */
+  async cleanTmp(): Promise<number> {
     const tmpDir = join(this.dir, TMP_DIR);
     let names: string[];
     try {
       names = await readdir(tmpDir);
     } catch (e) {
-      if (isEnoent(e)) return;
+      if (isEnoent(e)) return 0;
       throw new ExpedienteError('storage_error', 'No se pudo limpiar los temporales.');
     }
-    await Promise.all(names.filter((n) => n.endsWith('.part')).map((n) => rm(join(tmpDir, n), { force: true })));
+    const parts = names.filter((n) => n.endsWith('.part'));
+    await Promise.all(parts.map((n) => rm(join(tmpDir, n), { force: true })));
+    return parts.length;
   }
 }
