@@ -1,5 +1,5 @@
 export type * from './types.js';
-export { loadDeclaration } from './declaration.js';
+export { loadDeclaration, validateEntry, validDate, validIban } from './declaration.js';
 export { formatForField, normalize, typeCompatible } from './format.js';
 export { responseSchema, validateAnswer } from './mapping.js';
 export type { ModelAnswer, FieldPlan } from './mapping.js';

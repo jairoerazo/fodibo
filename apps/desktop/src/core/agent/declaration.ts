@@ -4,7 +4,7 @@ const TYPES: readonly DeclType[] = ['text', 'date', 'amount', 'iban', 'enum', 'b
 const KEY_RE = /^[a-z][a-z0-9_]*$/;
 const AMOUNT_RE = /^-?\d+(\.\d{1,2})?$/;
 
-function validDate(s: string): boolean {
+export function validDate(s: string): boolean {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
   if (!m) return false;
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
@@ -12,7 +12,7 @@ function validDate(s: string): boolean {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
 }
 
-function validIban(s: string): boolean {
+export function validIban(s: string): boolean {
   if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(s)) return false;
   const rearranged = s.slice(4) + s.slice(0, 4);
   let rem = 0;
@@ -23,7 +23,7 @@ function validIban(s: string): boolean {
   return rem === 1;
 }
 
-function validateEntry(key: string, raw: unknown): DeclEntry {
+export function validateEntry(key: string, raw: unknown): DeclEntry {
   if (!KEY_RE.test(key)) throw new Error(`Clave de declaración inválida: «${key}» (use minúsculas, dígitos y guion bajo)`);
   if (typeof raw !== 'object' || raw === null) throw new Error(`Entrada «${key}»: debe ser un objeto`);
   const { tipo, valor, moneda } = raw as Record<string, unknown>;

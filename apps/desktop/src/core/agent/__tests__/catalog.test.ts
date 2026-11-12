@@ -146,3 +146,19 @@ describe('CONCEPTS', () => {
     expect(checked).toBe(17);
   });
 });
+
+describe('catálogo: conceptos enum y variantes', () => {
+  it('los conceptos enum declaran sus valores', () => {
+    expect(CONCEPTS.find((c) => c.id === 'zivilstand')!.values).toEqual([
+      'ledig', 'verheiratet', 'geschieden', 'verwitwet', 'eingetragene Partnerschaft',
+    ]);
+    for (const c of CONCEPTS.filter((x) => x.tipo === 'enum')) {
+      expect(c.values?.length, c.id).toBeGreaterThan(0);
+    }
+  });
+  it('ningún id empieza por el prefijo de un concepto con variantes', () => {
+    for (const c of CONCEPTS.filter((x) => x.variants)) {
+      for (const o of CONCEPTS) expect(o.id.startsWith(`${c.id}_`), `${o.id} vs ${c.id}`).toBe(false);
+    }
+  });
+});

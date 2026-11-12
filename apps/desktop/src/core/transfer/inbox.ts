@@ -4,6 +4,7 @@ import { copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile }
 import { join } from 'node:path';
 import { finished } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
+import { canonical } from '../common/canonical.js';
 import { TransferError } from './errors.js';
 import { sniffOk } from './sniff.js';
 import type { Manifest, ManifestFile, Receipt, ReceivedPackage } from './types.js';
@@ -12,18 +13,6 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const SHA_RE = /^[0-9a-f]{64}$/;
 const STALE_MS = 24 * 3_600_000;
 const SNIFF_BYTES = 12;
-
-function canonical(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
-  if (v && typeof v === 'object') {
-    const o = v as Record<string, unknown>;
-    return `{${Object.keys(o)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(v);
-}
 
 async function exists(path: string): Promise<boolean> {
   try {

@@ -14,6 +14,8 @@ export interface Concept {
   /** Etiquetas del portal que designan exactamente este concepto. */
   labels: string[];
   variants?: boolean;
+  /** Valores admitidos de un concepto `enum`. */
+  values?: string[];
 }
 
 export const CONCEPTS: readonly Concept[] = [
@@ -21,7 +23,7 @@ export const CONCEPTS: readonly Concept[] = [
   { id: 'vorname', tipo: 'text', labels: ['Vorname', 'Vornamen'] },
   { id: 'geburtsdatum', tipo: 'date', labels: ['Geburtsdatum'] },
   { id: 'ahv_nr', tipo: 'text', labels: ['AHV-Nummer', 'AHV-Nr.', 'AHVN13'] },
-  { id: 'zivilstand', tipo: 'enum', labels: ['Zivilstand'] },
+  { id: 'zivilstand', tipo: 'enum', labels: ['Zivilstand'], values: ['ledig', 'verheiratet', 'geschieden', 'verwitwet', 'eingetragene Partnerschaft'] },
   { id: 'arbeitgeber_name', tipo: 'text', labels: ['Arbeitgeber', 'Arbeitgeberin'] },
   { id: 'bruttolohn_jahr', tipo: 'amount', labels: ['Bruttolohn'] },
   { id: 'nettolohn_jahr', tipo: 'amount', labels: ['Nettolohn'] },
