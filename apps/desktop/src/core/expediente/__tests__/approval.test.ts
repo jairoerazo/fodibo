@@ -11,7 +11,7 @@ import { ExpedienteError, type ExpedienteService } from '../index.js';
 import { contentHash } from '../projection.js';
 import { splitKey } from '../fields.js';
 import { openRaw, readApproval, tamperApproval } from '../storage/__tests__/helpers.js';
-import { approvable, closeAll, mk, three, writePackage } from './fixtures.js';
+import { approvable, closeAll, JSON_, mk, three, writePackage } from './fixtures.js';
 
 afterEach(closeAll);
 
@@ -244,6 +244,28 @@ describe('disponibilidad de originales', () => {
     const h = await approvable();
     h.svc.reportUnavailable(h.png);
     expect(h.svc.getCase(h.caseId).documents.find((d) => d.documentId === h.png)!.available).toBe(false);
+    expect(h.svc.getCase(h.caseId).documents.find((d) => d.documentId === h.pdf)!.available).toBe(true);
+  });
+
+  it('una marca de reportUnavailable sobrevive a recover() y a importar otro paquete en otro expediente, y sigue bloqueando', async () => {
+    const h = await approvable();
+    h.svc.saveField(h.caseId, { fieldId: h.svc.getCase(h.caseId).fields[0]!.fieldId, conceptId: 'bruttolohn_jahr', variant: '', valor: '85400', evidence: [{ documentId: h.pdf, page: 1 }] });
+    h.svc.reportUnavailable(h.pdf);
+    const other = h.svc.createCase({ taxYear: 2025, jurisdiction: 'ZH', persons: [{ role: 'hauptperson', label: 'Otro' }] }).caseId;
+    await h.svc.importPackage(other, writePackage(h.inboxDir, [{ name: 'datos.json', mime: 'application/json', body: JSON_ }]).packageId);
+    await h.svc.recover();
+    const view = h.svc.getCase(h.caseId);
+    expect(view.documents.find((d) => d.documentId === h.pdf)!.available).toBe(false);
+    expect(view.blockers).toContainEqual({ code: 'original_no_disponible', entity: 'document', id: h.pdf });
+    expect(catchErr(() => h.svc.approve(h.caseId, view.revision)).code).toBe('blocked');
+  });
+
+  it('una importación que publica de nuevo el blob rehabilita un documento marcado con reportUnavailable', async () => {
+    const h = await approvable();
+    const doc = h.svc.getCase(h.caseId).documents.find((d) => d.documentId === h.pdf)!;
+    h.svc.reportUnavailable(h.pdf);
+    rmSync(join(h.dbDir, 'blobs', doc.sha256.slice(0, 2), doc.sha256));
+    await h.svc.importPackage(h.caseId, writePackage(h.inboxDir, three.slice(0, 1)).packageId);
     expect(h.svc.getCase(h.caseId).documents.find((d) => d.documentId === h.pdf)!.available).toBe(true);
   });
 });

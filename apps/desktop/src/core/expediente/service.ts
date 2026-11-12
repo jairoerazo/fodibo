@@ -187,6 +187,8 @@ export class ExpedienteService {
   private queue: Promise<unknown> = Promise.resolve();
   /** Documentos cuyo blob falta o tiene otro tamaño (última `recover()`) o cuya lectura falló después (`reportUnavailable`). */
   protected missing = new Set<string>();
+  /** Originales cuya lectura falló después (p. ej. integrity_error): solo los limpia una restauración real del blob. */
+  protected unreadable = new Set<string>();
 
   private constructor(
     protected readonly store: CaseStore,
@@ -231,8 +233,9 @@ export class ExpedienteService {
   /** Importa el paquete al expediente de forma idempotente (spec §9); las llamadas se serializan. */
   importPackage(caseId: string, packageId: string): Promise<ImportResult> {
     return this.enqueue(async () => {
-      const result = await importPackage(this.importContext(), caseId, packageId);
-      await this.refreshMissing();
+      const written: string[] = [];
+      const result = await importPackage({ ...this.importContext(), onBlobWritten: (sha) => written.push(sha) }, caseId, packageId);
+      await this.refreshMissing(written);
       return result;
     });
   }
@@ -246,22 +249,33 @@ export class ExpedienteService {
     });
   }
 
-  /** Quita de `missing` los documentos cuyo blob vuelve a estar en el almacén con su tamaño (p. ej. tras importar de nuevo el archivo). */
-  private async refreshMissing(): Promise<void> {
-    for (const id of [...this.missing]) {
+  /**
+   * Tras importar: quita de `missing` los documentos cuyo blob vuelve a estar con su tamaño y de `unreadable` los
+   * cuyo blob ha publicado esta importación (`written`). Nunca falla: la importación ya está confirmada.
+   */
+  private async refreshMissing(written: string[]): Promise<void> {
+    for (const id of [...this.unreadable]) {
       const doc = this.store.getDocument(id);
-      if (!doc) {
-        this.missing.delete(id);
-        continue;
+      if (!doc || written.includes(doc.sha256)) this.unreadable.delete(id);
+    }
+    for (const id of [...this.missing]) {
+      try {
+        const doc = this.store.getDocument(id);
+        if (!doc) {
+          this.missing.delete(id);
+          continue;
+        }
+        const st = await this.blobs.stat(doc.sha256);
+        if (st && st.size === doc.size) this.missing.delete(id);
+      } catch {
+        /* se conserva la marca */
       }
-      const st = await this.blobs.stat(doc.sha256);
-      if (st && st.size === doc.size) this.missing.delete(id);
     }
   }
 
   /** Marca un original como no disponible tras una lectura fallida (lo llama el manejador del protocolo). */
   reportUnavailable(documentId: string): void {
-    if (this.store.getDocument(documentId)) this.missing.add(documentId);
+    if (this.store.getDocument(documentId)) this.unreadable.add(documentId);
   }
 
   close(): void {
@@ -359,7 +373,7 @@ export class ExpedienteService {
       evidence.set(e.field_id, list);
     }
     const persons = this.store.listPersons(caseId).map(personView);
-    const documents = this.store.listDocuments(caseId).map((d) => documentView(d, !this.missing.has(d.document_id)));
+    const documents = this.store.listDocuments(caseId).map((d) => documentView(d, !this.missing.has(d.document_id) && !this.unreadable.has(d.document_id)));
     const fields = this.store.listFields(caseId).map((f) => fieldView(f, evidence.get(f.field_id) ?? []));
     const approval = this.store.getLatestApprovalInfo(caseId);
     const lastApproval: ApprovalSummary | undefined = approval

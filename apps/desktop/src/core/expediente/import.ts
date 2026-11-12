@@ -33,6 +33,8 @@ export type ImportContext = {
   inboxDir: string;
   now: () => Date;
   hooks: { beforeImportCommit?: () => void };
+  /** Recibe el hash de cada blob que esta importación ha publicado de verdad (no los que ya estaban). */
+  onBlobWritten?: (sha256: string) => void;
   transact: <T>(fn: () => T) => T;
   commitChange: (caseId: string, entries: ChangeEntry[]) => number;
 };
@@ -150,6 +152,7 @@ export async function importPackage(ctx: ImportContext, caseId: string, packageI
 
   // Archivos antes que metadatos (§4.2). Si algo falla aquí, se retiran los blobs que esta llamada acaba de crear.
   const added: string[] = [];
+  const written: string[] = [];
   try {
     const seen = new Set<string>();
     for (const f of manifest.files) {
@@ -171,6 +174,7 @@ export async function importPackage(ctx: ImportContext, caseId: string, packageI
         throw integrity('No se pudo copiar un archivo del paquete.');
       }
       added.push(f.sha256);
+      written.push(f.sha256);
     }
   } catch (e) {
     await Promise.all(added.map((sha) => ctx.blobs.remove(sha).catch(() => undefined)));
@@ -228,6 +232,7 @@ export async function importPackage(ctx: ImportContext, caseId: string, packageI
     // Sin documentos nuevos no hay cambio de contenido: imports/import_files son solo registro de idempotencia (sin revisión).
     if (created.size > 0) ctx.commitChange(caseId, entries);
   });
+  for (const sha of written) ctx.onBlobWritten?.(sha);
   return result;
 }
 
