@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "approval_id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f70819",
+  "case_id": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+  "case_revision": 17,
+  "approved_at": "2026-11-12T10:15:00Z",
+  "approver": "usuario:local",
+  "content_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "content": {
+    "tax_year": 2025,
+    "jurisdiction": "ZH",
+    "rules_version": "2025",
+    "fields": {
+      "bruttolohn_jahr": {
+        "tipo": "amount",
+        "valor": "85400.00",
+        "moneda": "CHF"
+      }
+    },
+    "evidence": {
+      "bruttolohn_jahr": [
+        {
+          "document_id": "3f1c2a4b-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page": 1
+        }
+      ]
+    },
+    "documents": [
+      {
+        "document_id": "3f1c2a4b-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mime": "application/pdf",
+        "doc_type": "lohnausweis"
+      }
+    ]
+  }
+}

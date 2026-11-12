@@ -4,14 +4,14 @@ import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { describe, expect, test } from "vitest";
-import { errorSchema, manifestSchema, qrSchema, receiptSchema } from "../index.js";
+import { approvedDeclarationSchema, errorSchema, manifestSchema, qrSchema, receiptSchema } from "../index.js";
 
 const vectorsDir = join(fileURLToPath(new URL("..", import.meta.url)), "vectors");
 
 const ajv = new Ajv2020({ strict: true });
 (addFormats as unknown as (a: Ajv2020) => void)(ajv);
 
-const schemas = { qr: qrSchema, manifest: manifestSchema, receipt: receiptSchema, error: errorSchema };
+const schemas = { qr: qrSchema, manifest: manifestSchema, receipt: receiptSchema, error: errorSchema, "approved-declaration": approvedDeclarationSchema };
 
 function load(kind: string, outcome: "valid" | "invalid"): [string, unknown][] {
   const dir = join(vectorsDir, kind, outcome);

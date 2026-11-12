@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "approval_id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f70819",
+  "case_id": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+  "case_revision": 17,
+  "approved_at": "2026-11-12T10:15:00Z",
+  "approver": "usuario:local",
+  "content_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "content": {
+    "tax_year": 2025,
+    "jurisdiction": "ZH",
+    "rules_version": null,
+    "fields": {
+      "nachname": {
+        "tipo": "text",
+        "valor": "Müller"
+      },
+      "vorname": {
+        "tipo": "text",
+        "valor": "Anna"
+      },
+      "geburtsdatum": {
+        "tipo": "date",
+        "valor": "1984-03-07"
+      },
+      "ahv_nr": {
+        "tipo": "text",
+        "valor": "756.1234.5678.97"
+      },
+      "zivilstand": {
+        "tipo": "enum",
+        "valor": "verheiratet"
+      },
+      "arbeitgeber_name": {
+        "tipo": "text",
+        "valor": "Alpina Software AG"
+      },
+      "bruttolohn_jahr": {
+        "tipo": "amount",
+        "valor": "85400.00",
+        "moneda": "CHF"
+      },
+      "nettolohn_jahr": {
+        "tipo": "amount",
+        "valor": "74210.00",
+        "moneda": "CHF"
+      },
+      "ahv_iv_eo_alv_abzuege": {
+        "tipo": "amount",
+        "valor": "4526.20",
+        "moneda": "CHF"
+      },
+      "pensionskasse_beitraege": {
+        "tipo": "amount",
+        "valor": "5120.00",
+        "moneda": "CHF"
+      },
+      "pendlerkosten_oev": {
+        "tipo": "amount",
+        "valor": "2300.00",
+        "moneda": "CHF"
+      },
+      "saeule_3a_einzahlung": {
+        "tipo": "amount",
+        "valor": "7056.00",
+        "moneda": "CHF"
+      },
+      "krankenkasse_praemie_hauptperson": {
+        "tipo": "amount",
+        "valor": "4380.00",
+        "moneda": "CHF"
+      },
+      "krankenkasse_praemie_familie": {
+        "tipo": "amount",
+        "valor": "11940.00",
+        "moneda": "CHF"
+      },
+      "bankname": {
+        "tipo": "text",
+        "valor": "Banca Esempio SA"
+      },
+      "iban": {
+        "tipo": "iban",
+        "valor": "CH9300762011623852957"
+      },
+      "kontosaldo_31_12": {
+        "tipo": "amount",
+        "valor": "23150.75",
+        "moneda": "CHF"
+      },
+      "zinsertrag": {
+        "tipo": "amount",
+        "valor": "46.30",
+        "moneda": "CHF"
+      }
+    },
+    "evidence": {
+      "bruttolohn_jahr": [
+        {
+          "document_id": "3f1c2a4b-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "page": 1
+        }
+      ],
+      "kontosaldo_31_12": [
+        {
+          "document_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "sha256": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+          "page": 0
+        }
+      ]
+    },
+    "documents": [
+      {
+        "document_id": "3f1c2a4b-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mime": "application/pdf",
+        "doc_type": "lohnausweis"
+      },
+      {
+        "document_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        "sha256": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+        "mime": "image/jpeg",
+        "doc_type": "bankbeleg"
+      }
+    ]
+  }
+}
