@@ -143,6 +143,26 @@ describe('saveField', () => {
     expect(svc.fieldHistory(p.fieldId).map((e) => e.action)).toEqual(['create', 'update']);
   });
 
+  it('un campo regla ya confirmado: guardar idéntico es no-op y solo cambiar evidencias conserva el origen', async () => {
+    const { svc, caseId, pdf } = await withDocs();
+    svc.proposeField(caseId, { conceptId: 'bruttolohn_jahr', variant: '', valor: '100', evidence: [], origin: 'regla' });
+    const id = field(svc, caseId, 'bruttolohn_jahr')!.fieldId;
+    const input = { fieldId: id, conceptId: 'bruttolohn_jahr', variant: '', valor: '100.00' };
+    svc.saveField(caseId, { ...input, evidence: [] });
+    const rev = svc.getCase(caseId).revision;
+    const events: number[] = [];
+    svc.on((e) => events.push(e.revision));
+    svc.saveField(caseId, { ...input, evidence: [] });
+    expect(svc.getCase(caseId).revision).toBe(rev);
+    expect(events).toEqual([]);
+    expect(field(svc, caseId, 'bruttolohn_jahr')!.origin).toBe('regla');
+    svc.saveField(caseId, { ...input, evidence: [{ documentId: pdf, page: 1 }] });
+    expect(svc.getCase(caseId).revision).toBe(rev + 1);
+    expect(field(svc, caseId, 'bruttolohn_jahr')).toMatchObject({ origin: 'regla', status: 'confirmado' });
+    svc.saveField(caseId, { ...input, valor: '101', evidence: [] });
+    expect(field(svc, caseId, 'bruttolohn_jahr')!.origin).toBe('usuario');
+  });
+
   it('un campo ya confirmado por usuario pierde el origen si lo era otro y cambia el valor, y no puede cambiar de clave', async () => {
     const { svc, caseId } = await withDocs();
     svc.saveField(caseId, { conceptId: 'nachname', variant: '', valor: 'A', evidence: [] });

@@ -158,9 +158,10 @@ export function saveField(ctx: FieldsContext, caseId: string, input: FieldInput)
   }
   const { entry, evidence } = parseInput(ctx, caseId, input);
   const beforeEvidence = toEvidence(ctx.store, current.field_id);
-  // Invariante 8: confirmar sin cambios un campo pendiente conserva su origen; cualquier otra cosa lo pasa a usuario.
+  // Invariante 8 (Ruling 11): el origen se conserva mientras valor y moneda normalizados no cambien (sea cual sea el estado
+  // previo y aunque cambien las evidencias); solo cambiar el valor o la moneda lo pasa a usuario.
   const unchanged = String(entry.valor) === current.valor && (entry.moneda ?? null) === current.moneda;
-  const origin: FieldOrigin = current.status === 'pendiente' && unchanged ? current.origin : 'usuario';
+  const origin: FieldOrigin = unchanged ? current.origin : 'usuario';
   const next = fieldRow(ctx, current, entry, origin, 'confirmado');
   const before = fieldState(current, beforeEvidence);
   const after = fieldState(next, evidence);
