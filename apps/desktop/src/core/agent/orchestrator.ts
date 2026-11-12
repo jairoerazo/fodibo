@@ -1,3 +1,4 @@
+import { CONCEPTS, resolveFromCatalog, type Concept } from './catalog.js';
 import { normalize } from './format.js';
 import { responseSchema, validateAnswer, type FieldPlan } from './mapping.js';
 import { ModelError, type ModelClient } from './model-client.js';
@@ -30,6 +31,8 @@ export class AgentOrchestrator {
       onEvent: (e: AgentEvent) => void;
       maxSteps?: number;
       getBlockedSubmits?: () => number;
+      /** Conceptos reconocidos sin modelo; `false` lo desactiva (todo va al modelo). */
+      catalog?: readonly Concept[] | false;
     },
   ) {}
 
@@ -119,11 +122,7 @@ export class AgentOrchestrator {
       }
       this.emit({ type: 'state', state: 'rellenando', step: step.index, total: step.total });
       this.log(`Paso ${step.index}/${step.total}: ${step.title}`);
-      const plan = await this.plan(step);
-      if (plan) await this.apply(step, plan);
-      else
-        for (const f of step.fields)
-          this.record(step, f, { kind: 'pending', reason: 'modelo_sin_respuesta', candidates: [] });
+      await this.fillStep(step);
       this.check();
       this.log(`Avanzando desde el paso ${step.index}`);
       await adapter.avanzarPaso();
@@ -139,25 +138,90 @@ export class AgentOrchestrator {
     }
   }
 
-  private async plan(step: ObservedStep): Promise<FieldPlan[] | null> {
-    const messages = buildMessages(step, this.opts.declaration);
-    const schema = responseSchema(step, this.opts.declaration);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      this.check();
-      try {
-        const answer = await this.opts.model.complete(messages, schema, this.ac.signal);
-        this.check();
-        const v = validateAnswer(step, this.opts.declaration, answer);
-        if (v.ok) return v.plan;
-        this.log(`Respuesta del modelo no válida (${v.error})`);
-      } catch (e) {
-        this.check();
-        if (!(e instanceof ModelError)) throw e;
-        this.log(`Error del modelo: ${e.message}`);
+  /**
+   * Resuelve primero con el catálogo los campos cuya etiqueta reconoce (misma validación y escritura que
+   * una respuesta del modelo) y deja al modelo solo el resto. Ver `fillWithModel`.
+   */
+  private async fillStep(step: ObservedStep): Promise<void> {
+    const catalog = this.opts.catalog ?? CONCEPTS;
+    let rest = step.fields;
+    if (catalog !== false) {
+      const { answer, resolved } = resolveFromCatalog(step, this.opts.declaration, catalog);
+      if (resolved.size > 0) {
+        const known = { ...step, fields: step.fields.filter((f) => resolved.has(f.field_id)) };
+        const v = validateAnswer(known, this.opts.declaration, answer);
+        if (v.ok) {
+          this.log(`Catálogo: ${resolved.size} de ${step.fields.length} campos sin modelo`);
+          await this.apply(step, v.plan);
+          rest = step.fields.filter((f) => !resolved.has(f.field_id));
+        }
       }
     }
+    this.check();
+    if (rest.length > 0) await this.fillWithModel({ ...step, fields: rest });
+  }
+
+  /**
+   * Pide al modelo la asignación del paso y escribe cada campo en cuanto la respuesta en streaming lo
+   * cierra. Cada campo pasa por `validateAnswer` (el mismo paso reducido a ese campo) antes de escribirse;
+   * uno no válido espera a la respuesta completa, que se valida entera. Si la respuesta se corta, el
+   * reintento solo aplica los campos aún no tratados.
+   */
+  private async fillWithModel(step: ObservedStep): Promise<void> {
+    const decl = this.opts.declaration;
+    const messages = buildMessages(step, decl);
+    const schema = responseSchema(step, decl);
+    const handled = new Set<string>();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      this.check();
+      // Escrituras en orden, una tras otra; si una falla, se corta la respuesta del modelo.
+      const writer = new AbortController();
+      let queue = Promise.resolve();
+      let writeError: unknown;
+      const enqueue = (plan: FieldPlan[]) => {
+        for (const p of plan) handled.add(p.field.field_id);
+        queue = queue.then(() => this.apply(step, plan)).catch((e: unknown) => {
+          writeError ??= e;
+          writer.abort();
+        });
+      };
+      const onField = (fieldId: string, value: unknown) => {
+        if (writeError !== undefined || this.stopped || handled.has(fieldId)) return;
+        const field = step.fields.find((f) => f.field_id === fieldId);
+        if (!field) return;
+        const v = validateAnswer({ ...step, fields: [field] }, decl, { [fieldId]: value });
+        if (v.ok) enqueue(v.plan);
+      };
+      if (attempt === 0) this.log('Esperando la respuesta del modelo');
+      let answer: unknown;
+      let failure: string | undefined;
+      try {
+        answer = await this.opts.model.complete(messages, schema, AbortSignal.any([this.ac.signal, writer.signal]), onField);
+      } catch (e) {
+        if (!(e instanceof ModelError) && writeError === undefined) {
+          await queue;
+          throw e;
+        }
+        failure = e instanceof ModelError ? `Error del modelo: ${e.message}` : String(e);
+      }
+      await queue;
+      if (writeError !== undefined) throw writeError;
+      this.check();
+      if (failure === undefined) {
+        const v = validateAnswer(step, decl, answer);
+        if (v.ok) {
+          enqueue(v.plan.filter((p) => !handled.has(p.field.field_id)));
+          await queue;
+          if (writeError !== undefined) throw writeError;
+          return;
+        }
+        failure = `Respuesta del modelo no válida (${v.error})`;
+      }
+      this.log(failure);
+    }
     this.log(`Sin respuesta válida del modelo en el paso ${step.index}`);
-    return null;
+    for (const f of step.fields)
+      if (!handled.has(f.field_id)) this.record(step, f, { kind: 'pending', reason: 'modelo_sin_respuesta', candidates: [] });
   }
 
   private async apply(step: ObservedStep, plan: FieldPlan[]): Promise<void> {

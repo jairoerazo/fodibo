@@ -22,14 +22,14 @@ const mk = () => step([
   f({ field_id: 'f_text', type: 'text' }),
   f({ field_id: 'f_date', type: 'date' }),
   f({ field_id: 'f_amount', type: 'amount', required: true }),
-  f({ field_id: 'f_select', type: 'select', options: ['soltero', 'casado'] }),
+  f({ field_id: 'f_select', type: 'select', options: ['ledig', 'verheiratet'] }),
   f({ field_id: 'f_opt', type: 'amount' }),
 ]);
 const good = () => ({
-  f_text: { source: 'apellido' },
-  f_date: { source: 'fecha_nacimiento' },
-  f_amount: { source: 'salario_bruto' },
-  f_select: { source: 'estado_civil', option: 'casado' },
+  f_text: { source: 'nachname' },
+  f_date: { source: 'geburtsdatum' },
+  f_amount: { source: 'bruttolohn_jahr' },
+  f_select: { source: 'zivilstand', option: 'verheiratet' },
   f_opt: { skip: true },
 });
 const plan = (s: ObservedStep, a: unknown): FieldPlan[] => {
@@ -41,10 +41,10 @@ const plan = (s: ObservedStep, a: unknown): FieldPlan[] => {
 describe('validateAnswer', () => {
   it('respuesta correcta produce fills formateados', () => {
     const p = plan(mk(), good());
-    expect(p[0]).toMatchObject({ action: 'fill', source: 'apellido', value: 'Müller' });
+    expect(p[0]).toMatchObject({ action: 'fill', source: 'nachname', value: 'Müller' });
     expect(p[1]).toMatchObject({ action: 'fill', value: '07.03.1984' });
     expect(p[2]).toMatchObject({ action: 'fill', value: '85400.00' });
-    expect(p[3]).toMatchObject({ action: 'fill', value: 'casado' });
+    expect(p[3]).toMatchObject({ action: 'fill', value: 'verheiratet' });
     expect(p[4]).toMatchObject({ action: 'skip' });
   });
 
@@ -54,8 +54,8 @@ describe('validateAnswer', () => {
     expect(validateAnswer(s, decl, missing).ok).toBe(false);
     expect(validateAnswer(s, decl, { ...good(), extra: { skip: true } }).ok).toBe(false);
     expect(validateAnswer(s, decl, { ...good(), f_text: { foo: 1 } }).ok).toBe(false);
-    expect(validateAnswer(s, decl, { ...good(), f_text: { source: 'apellido', valor: 'X' } }).ok).toBe(false);
-    expect(validateAnswer(s, decl, { ...good(), f_text: { source: 'apellido', option: 'x' } }).ok).toBe(false);
+    expect(validateAnswer(s, decl, { ...good(), f_text: { source: 'nachname', valor: 'X' } }).ok).toBe(false);
+    expect(validateAnswer(s, decl, { ...good(), f_text: { source: 'nachname', option: 'x' } }).ok).toBe(false);
     expect(validateAnswer(s, decl, { ...good(), f_text: { skip: false } }).ok).toBe(false);
     for (const bad of [null, undefined, 3, 'x', [], [good()]]) expect(validateAnswer(s, decl, bad).ok).toBe(false);
   });
@@ -72,16 +72,16 @@ describe('validateAnswer', () => {
   });
 
   it('amount <- clave text -> tipo_incompatible', () => {
-    const p = plan(mk(), { ...good(), f_amount: { source: 'apellido' } });
+    const p = plan(mk(), { ...good(), f_amount: { source: 'nachname' } });
     expect(p[2]).toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
   });
 
   it('option fuera de lista o source no enum -> tipo_incompatible', () => {
-    expect(plan(mk(), { ...good(), f_select: { source: 'estado_civil', option: 'viudo' } })[3])
+    expect(plan(mk(), { ...good(), f_select: { source: 'zivilstand', option: 'viudo' } })[3])
       .toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
-    expect(plan(mk(), { ...good(), f_select: { source: 'apellido', option: 'casado' } })[3])
+    expect(plan(mk(), { ...good(), f_select: { source: 'nachname', option: 'verheiratet' } })[3])
       .toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
-    expect(plan(mk(), { ...good(), f_select: { source: 'estado_civil' } })[3])
+    expect(plan(mk(), { ...good(), f_select: { source: 'zivilstand' } })[3])
       .toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
   });
 
@@ -90,21 +90,21 @@ describe('validateAnswer', () => {
       ...good(),
       f_amount: {
         pending: 'dos primas',
-        candidates: ['prima_seguro_medico_titular', 'prima_seguro_medico_familia', 'inventada'],
+        candidates: ['krankenkasse_praemie_hauptperson', 'krankenkasse_praemie_familie', 'inventada'],
       },
     });
     expect(p[2]).toMatchObject({
       action: 'pending', reason: 'ambiguo', detail: 'dos primas',
       candidates: [
-        { key: 'prima_seguro_medico_titular', valor: '4380.00' },
-        { key: 'prima_seguro_medico_familia', valor: '11940.00' },
+        { key: 'krankenkasse_praemie_hauptperson', valor: '4380.00' },
+        { key: 'krankenkasse_praemie_familie', valor: '11940.00' },
       ],
     });
   });
 
   it('pending con <2 candidatos -> sin_dato; mas de 5 candidatos invalido', () => {
-    expect(plan(mk(), { ...good(), f_amount: { pending: 'x', candidates: ['salario_neto', 'zzz'] } })[2])
-      .toMatchObject({ reason: 'sin_dato', candidates: [{ key: 'salario_neto', valor: '74210.00' }] });
+    expect(plan(mk(), { ...good(), f_amount: { pending: 'x', candidates: ['nettolohn_jahr', 'zzz'] } })[2])
+      .toMatchObject({ reason: 'sin_dato', candidates: [{ key: 'nettolohn_jahr', valor: '74210.00' }] });
     expect(plan(mk(), { ...good(), f_amount: { pending: 'x' } })[2]).toMatchObject({ reason: 'sin_dato', candidates: [] });
     expect(validateAnswer(mk(), decl, { ...good(), f_amount: { pending: 'x', candidates: Array(6).fill('a') } }).ok).toBe(false);
   });
@@ -116,12 +116,12 @@ describe('validateAnswer', () => {
   it('valor previo igual -> keep, distinto -> valor_previo_distinto', () => {
     const s = mk();
     s.fields[2]!.value = "85'400.00";
-    s.fields[3]!.value = 'casado';
+    s.fields[3]!.value = 'verheiratet';
     const p = plan(s, good());
     expect(p[2]).toMatchObject({ action: 'keep' });
     expect(p[3]).toMatchObject({ action: 'keep' });
     s.fields[2]!.value = '1.00';
-    s.fields[3]!.value = 'soltero';
+    s.fields[3]!.value = 'ledig';
     const q = plan(s, good());
     expect(q[2]).toMatchObject({ action: 'pending', reason: 'valor_previo_distinto' });
     expect(q[3]).toMatchObject({ action: 'pending', reason: 'valor_previo_distinto' });
@@ -131,17 +131,17 @@ describe('validateAnswer', () => {
 
   it('misma clave en campos de tipos distintos -> ambos tipo_incompatible', () => {
     const s = step([f({ field_id: 'a', type: 'amount' }), f({ field_id: 'b', type: 'text' })]);
-    const p = plan(s, { a: { source: 'salario_bruto' }, b: { source: 'salario_bruto' } });
+    const p = plan(s, { a: { source: 'bruttolohn_jahr' }, b: { source: 'bruttolohn_jahr' } });
     expect(p[0]).toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
     expect(p[1]).toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
   });
 
   it('misma clave en un select y otro campo de tipo distinto -> ambos tipo_incompatible', () => {
     const s = step([
-      f({ field_id: 'a', type: 'select', options: ['soltero', 'casado'] }),
+      f({ field_id: 'a', type: 'select', options: ['ledig', 'verheiratet'] }),
       f({ field_id: 'b', type: 'text' }),
     ]);
-    const p = plan(s, { a: { source: 'estado_civil', option: 'casado' }, b: { source: 'estado_civil' } });
+    const p = plan(s, { a: { source: 'zivilstand', option: 'verheiratet' }, b: { source: 'zivilstand' } });
     expect(p[0]).toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
     expect(p[1]).toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
   });
@@ -149,7 +149,7 @@ describe('validateAnswer', () => {
   it('checkbox solo con clave boolean', () => {
     const d2: Declaration = { ...decl, acepta: { tipo: 'boolean', valor: true } };
     const s = step([f({ field_id: 'c', type: 'checkbox' }), f({ field_id: 'd', type: 'checkbox' })]);
-    const r = validateAnswer(s, d2, { c: { source: 'acepta' }, d: { source: 'salario_bruto' } });
+    const r = validateAnswer(s, d2, { c: { source: 'acepta' }, d: { source: 'bruttolohn_jahr' } });
     expect(r.ok && r.plan[0]).toMatchObject({ action: 'fill', value: 'true' });
     expect(r.ok && r.plan[1]).toMatchObject({ action: 'pending', reason: 'tipo_incompatible' });
   });
@@ -160,13 +160,13 @@ describe('propiedad de seguridad: ningun valor sale del modelo', () => {
   const s = mk();
   const keys = Object.keys(decl);
   const junk: unknown[] = [
-    null, 0, 7, true, 'texto', [], [smuggle], {}, { source: smuggle }, { source: 5 }, { source: ['apellido'] },
+    null, 0, 7, true, 'texto', [], [smuggle], {}, { source: smuggle }, { source: 5 }, { source: ['nachname'] },
     { source: { a: smuggle } }, { skip: smuggle }, { skip: true, valor: smuggle }, { pending: { x: smuggle } },
-    { pending: smuggle, candidates: [smuggle, 'apellido', 1, null] }, { pending: smuggle, value: smuggle },
-    { source: 'apellido', value: smuggle }, { source: 'apellido', valor: smuggle },
-    { source: 'estado_civil', option: smuggle }, { source: 'estado_civil', option: ['casado'] },
-    { source: 'estado_civil', option: 'casado', value: smuggle }, { source: '__proto__' },
-    { source: 'toString' }, { source: 'salario_neto' }, { source: 'intereses_bancarios' },
+    { pending: smuggle, candidates: [smuggle, 'nachname', 1, null] }, { pending: smuggle, value: smuggle },
+    { source: 'nachname', value: smuggle }, { source: 'nachname', valor: smuggle },
+    { source: 'zivilstand', option: smuggle }, { source: 'zivilstand', option: ['verheiratet'] },
+    { source: 'zivilstand', option: 'verheiratet', value: smuggle }, { source: '__proto__' },
+    { source: 'toString' }, { source: 'nettolohn_jahr' }, { source: 'zinsertrag' },
     { source: smuggle }, { pending: smuggle }, { skip: true },
   ];
   const check = (st: ObservedStep, answer: unknown) => {
@@ -211,7 +211,7 @@ describe('propiedad de seguridad: ningun valor sale del modelo', () => {
     expect(okCount).toBeGreaterThan(100);
     for (const j of junk) check(s, j);
     // respuesta con propiedades extra a nivel superior
-    check(s, { ...good(), [smuggle]: { source: 'apellido' } });
+    check(s, { ...good(), [smuggle]: { source: 'nachname' } });
   });
 });
 
@@ -219,16 +219,20 @@ describe('responseSchema', () => {
   const validate = new Ajv2020({ strict: false }).compile(responseSchema(mk(), decl));
   it('acepta la respuesta correcta', () => {
     expect(validate(good())).toBe(true);
-    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['salario_bruto'] } })).toBe(true);
+    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['bruttolohn_jahr'] } })).toBe(true);
   });
   it('rechaza field_id extra o faltante, option fuera de lista, option en no-select', () => {
     expect(validate({ ...good(), extra: { skip: true } })).toBe(false);
     const m: Record<string, unknown> = good(); delete m.f_text;
     expect(validate(m)).toBe(false);
-    expect(validate({ ...good(), f_select: { source: 'estado_civil', option: 'viudo' } })).toBe(false);
-    expect(validate({ ...good(), f_text: { source: 'apellido', option: 'x' } })).toBe(false);
-    expect(validate({ ...good(), f_text: { source: 'apellido', valor: 'x' } })).toBe(false);
-    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: Array(6).fill('salario_bruto') } })).toBe(false);
+    expect(validate({ ...good(), f_select: { source: 'zivilstand', option: 'viudo' } })).toBe(false);
+    expect(validate({ ...good(), f_text: { source: 'nachname', option: 'x' } })).toBe(false);
+    expect(validate({ ...good(), f_text: { source: 'nachname', valor: 'x' } })).toBe(false);
+    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: Array(6).fill('bruttolohn_jahr') } })).toBe(false);
+  });
+  it('el motivo de pending es breve (como mucho 80 caracteres)', () => {
+    expect(validate({ ...good(), f_amount: { pending: 'x'.repeat(80) } })).toBe(true);
+    expect(validate({ ...good(), f_amount: { pending: 'x'.repeat(81) } })).toBe(false);
   });
 });
 
@@ -239,19 +243,19 @@ describe('responseSchema restringido a la declaración', () => {
 
   it('source solo admite claves de tipo compatible', () => {
     const validate = ajv.compile(responseSchema(mk(), decl));
-    expect(validate({ ...good(), f_amount: { source: 'apellido' } })).toBe(false); // text en amount
+    expect(validate({ ...good(), f_amount: { source: 'nachname' } })).toBe(false); // text en amount
     expect(validate({ ...good(), f_amount: { source: 'no_existe' } })).toBe(false);
     expect(validate({ ...good(), f_amount: { source: 'Bruttolohn' } })).toBe(false); // etiqueta en vez de clave
-    expect(validate({ ...good(), f_amount: { source: 'salario_neto' } })).toBe(true);
-    expect(validate({ ...good(), f_select: { source: 'apellido', option: 'casado' } })).toBe(false);
+    expect(validate({ ...good(), f_amount: { source: 'nettolohn_jahr' } })).toBe(true);
+    expect(validate({ ...good(), f_select: { source: 'nachname', option: 'verheiratet' } })).toBe(false);
     const amountKeys = forms(responseSchema(mk(), decl), 'f_amount').find((x) => x.required.includes('source'))!.properties.source.enum;
     expect(amountKeys).toEqual(Object.keys(decl).filter((k) => decl[k]!.tipo === 'amount'));
   });
 
   it('candidates solo admite claves compatibles', () => {
     const validate = ajv.compile(responseSchema(mk(), decl));
-    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['salario_bruto', 'salario_neto'] } })).toBe(true);
-    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['apellido'] } })).toBe(false);
+    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['bruttolohn_jahr', 'nettolohn_jahr'] } })).toBe(true);
+    expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['nachname'] } })).toBe(false);
     expect(validate({ ...good(), f_amount: { pending: 'x', candidates: ['a'] } })).toBe(false);
   });
 
@@ -267,10 +271,10 @@ describe('responseSchema restringido a la declaración', () => {
     const schema = responseSchema(s, decl); // la declaración de prueba no tiene booleanos
     expect(forms(schema, 'f_bool').map((x) => x.required)).toEqual([['pending'], ['skip']]);
     const validate = ajv.compile(schema);
-    expect(validate({ f_bool: { source: 'apellido' } })).toBe(false);
+    expect(validate({ f_bool: { source: 'nachname' } })).toBe(false);
     expect(validate({ f_bool: { pending: 'sin dato' } })).toBe(true);
     expect(validate({ f_bool: { pending: 'sin dato', candidates: [] } })).toBe(true);
-    expect(validate({ f_bool: { pending: 'sin dato', candidates: ['apellido'] } })).toBe(false);
+    expect(validate({ f_bool: { pending: 'sin dato', candidates: ['nachname'] } })).toBe(false);
   });
 
   it('select sin opciones: sin forma source+option', () => {
@@ -282,7 +286,7 @@ describe('responseSchema restringido a la declaración', () => {
 
   it('validateAnswer sigue siendo la puerta: una respuesta fuera del esquema se rechaza o queda pendiente', () => {
     const s = mk();
-    const a = { ...good(), f_amount: { source: 'apellido' } };
+    const a = { ...good(), f_amount: { source: 'nachname' } };
     expect(ajv.compile(responseSchema(s, decl))(a)).toBe(false);
     const v = validateAnswer(s, decl, a);
     expect(v.ok).toBe(true);

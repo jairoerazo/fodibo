@@ -7,6 +7,8 @@ export { buildMessages } from './prompt.js';
 export { createLlamaClient, ModelError } from "./model-client.js";
 export type { ModelClient, ChatMessage } from "./model-client.js";
 export { AgentOrchestrator } from "./orchestrator.js";
+export { CONCEPTS, normalizeLabel, resolveFromCatalog } from './catalog.js';
+export type { Concept } from './catalog.js';
 export type { AgentState, AgentEvent } from "./orchestrator.js";
 export { scoreRun, accept, parseExpected, resultKey } from "./bench.js";
 export type { ExpectedField, RunScore } from "./bench.js";

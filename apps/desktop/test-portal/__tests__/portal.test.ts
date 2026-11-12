@@ -168,7 +168,7 @@ describe('portal de prueba', () => {
         expect(v).not.toHaveProperty('option');
       }
     }
-    expect(esperado['1/Zivilstand']).toEqual({ source: 'estado_civil', option: 'verheiratet' });
+    expect(esperado['1/Zivilstand']).toEqual({ source: 'zivilstand', option: 'verheiratet' });
     // cubre todos los campos de los pasos 1-4
     const total = [1, 2, 3, 4].reduce((n, s) => n + section(s).querySelectorAll('[name]').length, 0);
     expect(Object.keys(esperado).length).toBe(total);
