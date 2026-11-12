@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -143,6 +143,26 @@ describe('importPackage', () => {
     const bad = writePackage(inboxDir, three);
     writeFileSync(join(bad.dir, 'manifest.json'), '{"schema_version":1}');
     expect((await rejects(svc.importPackage(caseId, bad.packageId))).code).toBe('package_invalid');
+  });
+
+  it('file_id repetido en el manifiesto o archivo de más en el recibo: package_invalid sin blobs ni filas', async () => {
+    const { svc, inboxDir, dbDir, caseId } = await mk();
+    const blobs = () => (svc as unknown as { blobs: { list(): Promise<string[]> } }).blobs.list();
+    const dup = writePackage(inboxDir, [three[0]!, three[1]!]);
+    const m = JSON.parse(readFileSync(join(dup.dir, 'manifest.json'), 'utf8'));
+    m.files[1].file_id = m.files[0].file_id;
+    writeFileSync(join(dup.dir, 'manifest.json'), JSON.stringify(m));
+    expect((await rejects(svc.importPackage(caseId, dup.packageId))).code).toBe('package_invalid');
+
+    const extra = writePackage(inboxDir, [three[0]!, three[1]!]);
+    const r = JSON.parse(readFileSync(join(extra.dir, 'receipt.json'), 'utf8'));
+    r.files[1].file_id = randomUUID();
+    writeFileSync(join(extra.dir, 'receipt.json'), JSON.stringify(r));
+    expect((await rejects(svc.importPackage(caseId, extra.packageId))).code).toBe('package_invalid');
+
+    expect(await blobs()).toEqual([]);
+    expect(count(dbDir, 'SELECT COUNT(*) AS n FROM imports')).toBe(0);
+    expect(count(dbDir, 'SELECT COUNT(*) AS n FROM documents')).toBe(0);
   });
 
   it('reimportar devuelve already_imported sin cambiar revisión ni documentos', async () => {

@@ -81,6 +81,10 @@ async function loadPackage(inboxDir: string, packageId: string): Promise<Loaded>
 function checkConsistency(manifest: Manifest, receipt: Receipt): void {
   if (manifest.files.length !== receipt.files.length) throw invalidPackage('El recibo no coincide con el manifiesto.');
   const received = new Map(receipt.files.map((f) => [f.file_id, f]));
+  const declared = new Set(manifest.files.map((f) => f.file_id));
+  if (declared.size !== manifest.files.length) throw invalidPackage('El manifiesto repite identificadores de archivo.');
+  if (received.size !== receipt.files.length) throw invalidPackage('El recibo repite identificadores de archivo.');
+  for (const id of received.keys()) if (!declared.has(id)) throw invalidPackage('El recibo no coincide con el manifiesto.');
   const bySha = new Map<string, { size: number; mime: string }>();
   let total = 0;
   for (const f of manifest.files) {
